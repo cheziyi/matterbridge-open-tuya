@@ -1,0 +1,315 @@
+// VS Code tasks v.1.0.4
+{
+  "version": "2.0.0",
+  "tasks": [
+    // --DO NOT EDIT BELOW THIS LINE--
+    {
+      "label": "Start",
+      "detail": "npm run start",
+      "type": "npm",
+      "script": "start",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build and Start",
+      "detail": "npm run build and start",
+      "dependsOn": ["Build", "Start"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "Build",
+      "detail": "npm run build",
+      "type": "npm",
+      "script": "build",
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Clean and Build",
+      "detail": "npm run cleanBuild",
+      "type": "npm",
+      "script": "cleanBuild",
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Build Production",
+      "detail": "npm run buildProduction",
+      "type": "npm",
+      "script": "buildProduction",
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Clean and Build Production",
+      "detail": "npm run cleanBuildProduction",
+      "type": "npm",
+      "script": "cleanBuildProduction",
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "Watch",
+      "detail": "npm run watch",
+      "type": "npm",
+      "script": "watch",
+      "isBackground": true,
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": ["$tsc-watch"]
+    },
+    {
+      "label": "Lint",
+      "detail": "Run lint",
+      "type": "npm",
+      "script": "lint",
+      "problemMatcher": []
+    },
+    {
+      "label": "Format",
+      "detail": "Run format",
+      "type": "npm",
+      "script": "format",
+      "problemMatcher": []
+    },
+    {
+      "label": "Test",
+      "detail": "Run test with coverage",
+      "type": "npm",
+      "script": "test:coverage",
+      "problemMatcher": []
+    },
+    {
+      "label": "Run me before publish",
+      "detail": "Clean build, lint, format, typecheck, test coverage, and build",
+      "type": "npm",
+      "script": "runMeBeforePublish",
+      "problemMatcher": []
+    },
+    {
+      "label": "Check Dependencies",
+      "detail": "Check for outdated dependencies",
+      "type": "npm",
+      "script": "checkDependencies",
+      "problemMatcher": []
+    },
+    {
+      "label": "Update Dependencies",
+      "detail": "Update outdated dependencies",
+      "type": "npm",
+      "script": "updateDependencies",
+      "problemMatcher": []
+    },
+    {
+      "label": "Reset",
+      "detail": "Deep clean, install, link matterbridge, and build",
+      "type": "npm",
+      "script": "reset",
+      "problemMatcher": []
+    },
+    {
+      "label": "Soft Reset",
+      "detail": "Install, link matterbridge, and build",
+      "type": "npm",
+      "script": "softReset",
+      "problemMatcher": []
+    },
+    {
+      "label": "Update",
+      "detail": "Update the package with mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--update"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Upgrade",
+      "detail": "Upgrade the package with mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--upgrade"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Install and Validate",
+      "detail": "Install dependencies, build, typecheck, lint, and format with mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--install", "--build", "--typecheck", "--lint", "--format"],
+      "problemMatcher": []
+    },
+    {
+      "label": "System info",
+      "detail": "Show system information with mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--info"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Bundle",
+      "detail": "Bundle with esbuild using mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--esbuild"],
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Minify",
+      "detail": "Bundle and minify with esbuild using mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--esbuild", "minify"],
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Obfuscate",
+      "detail": "Bundle, minify and obfuscate with esbuild using mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--esbuild", "minify", "obfuscate"],
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pack",
+      "detail": "Build and pack the package tarball using mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--pack", "local"],
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pack Minify",
+      "detail": "Build, minify and pack the package tarball using mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--pack", "local", "minify"],
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Pack Obfuscate",
+      "detail": "Build, minify, obfuscate and pack the package tarball using mb-run",
+      "type": "shell",
+      "command": "npx",
+      "args": ["--yes", "mb-run", "--pack", "local", "minify", "obfuscate"],
+      "group": { "kind": "build", "isDefault": false },
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Ubuntu Install",
+      "detail": "Run an ubuntu:latest container on the host network with Node.js and bun",
+      "type": "process",
+      "command": "docker",
+      "args": [
+        "run",
+        "-it",
+        "--pull",
+        "always",
+        "--hostname",
+        "ubuntu",
+        "--name",
+        "ubuntu",
+        "--network",
+        "host",
+        "--entrypoint",
+        "bash",
+        "ubuntu:latest",
+        "-c",
+        "if [ ! -e /var/lib/matterbridge-install.done ]; then apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && curl -4 -fsSL https://matterbridge.io/scripts/install-debian.sh -o /tmp/install.sh && bash /tmp/install.sh || exit 1; fi; exec \"$@\"",
+        "_",
+        "bash"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Debian Install",
+      "detail": "Run a debian:latest container on the host network with Node.js and bun",
+      "type": "process",
+      "command": "docker",
+      "args": [
+        "run",
+        "-it",
+        "--pull",
+        "always",
+        "--hostname",
+        "debian",
+        "--name",
+        "debian",
+        "--network",
+        "host",
+        "--entrypoint",
+        "bash",
+        "debian:latest",
+        "-c",
+        "if [ ! -e /var/lib/matterbridge-install.done ]; then apt-get update && apt-get install -y --no-install-recommends curl ca-certificates && curl -4 -fsSL https://matterbridge.io/scripts/install-debian.sh -o /tmp/install.sh && bash /tmp/install.sh || exit 1; fi; exec \"$@\"",
+        "_",
+        "bash"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Docker: Alpine Install",
+      "detail": "Run an alpine:latest container on the host network with Node.js and bun",
+      "type": "process",
+      "command": "docker",
+      "args": [
+        "run",
+        "-it",
+        "--pull",
+        "always",
+        "--hostname",
+        "alpine",
+        "--name",
+        "alpine",
+        "--network",
+        "host",
+        "--entrypoint",
+        "sh",
+        "alpine:latest",
+        "-c",
+        "if [ ! -e /var/lib/matterbridge-install.done ]; then apk add --no-cache curl && curl -4 -fsSL https://matterbridge.io/scripts/install-alpine.sh -o /tmp/install.sh && sh /tmp/install.sh || exit 1; fi; exec \"$@\"",
+        "_",
+        "bash"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Git Status",
+      "detail": "Run Git Status Script",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/git-status.mjs"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Create Release",
+      "detail": "Run Create Release Script",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/create-release.mjs"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Npm Downloads",
+      "detail": "Run Npm Downloads Script",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/downloads.mjs"],
+      "problemMatcher": []
+    },
+    {
+      "label": "Remove Workflows",
+      "detail": "Run Remove Workflows Script",
+      "type": "shell",
+      "command": "node",
+      "args": ["scripts/remove-workflows.mjs"],
+      "problemMatcher": []
+    }
+    // --DO NOT EDIT ABOVE THIS LINE--
+  ]
+}

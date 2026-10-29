@@ -1,0 +1,598 @@
+# <img src="https://matterbridge.io/assets/matterbridge.svg" alt="Matterbridge Logo" width="64px" height="64px">&nbsp;&nbsp;&nbsp;Matterbridge plugin template changelog
+
+[![npm version](https://img.shields.io/npm/v/matterbridge.svg)](https://www.npmjs.com/package/matterbridge)
+[![npm downloads](https://img.shields.io/npm/dt/matterbridge.svg)](https://www.npmjs.com/package/matterbridge)
+[![Docker Version](https://img.shields.io/docker/v/luligu/matterbridge/latest?label=docker%20version)](https://hub.docker.com/r/luligu/matterbridge)
+[![Docker Pulls](https://img.shields.io/docker/pulls/luligu/matterbridge?label=docker%20pulls)](https://hub.docker.com/r/luligu/matterbridge)
+![Node.js CI](https://github.com/Luligu/matterbridge-plugin-template/actions/workflows/build.yml/badge.svg)
+![CodeQL](https://github.com/Luligu/matterbridge-plugin-template/actions/workflows/codeql.yml/badge.svg)
+[![codecov](https://codecov.io/gh/Luligu/matterbridge-plugin-template/branch/main/graph/badge.svg)](https://codecov.io/gh/Luligu/matterbridge-plugin-template)
+[![tested with Vitest](https://img.shields.io/badge/tested_with-Vitest-6E9F18.svg?logo=vitest&logoColor=white)](https://vitest.dev)
+[![styled with Oxc](https://img.shields.io/badge/styled_with-Oxc-9BE4E0.svg?logo=oxc&logoColor=white)](https://oxc.rs/docs/guide/usage/formatter.html)
+[![linted with Oxc](https://img.shields.io/badge/linted_with-Oxc-9BE4E0.svg?logo=oxc&logoColor=white)](https://oxc.rs/docs/guide/usage/linter.html)
+[![TypeScript Native](https://img.shields.io/badge/TypeScript_Native-3178C6?logo=typescript&logoColor=white)](https://github.com/microsoft/typescript-go)
+[![ESM](https://img.shields.io/badge/ESM-Node.js-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
+[![matterbridge.io](https://img.shields.io/badge/matterbridge.io-online-brightgreen)](https://matterbridge.io)
+
+[![powered by](https://img.shields.io/badge/powered%20by-matterbridge-blue)](https://www.npmjs.com/package/matterbridge)
+[![powered by](https://img.shields.io/badge/powered%20by-matter--history-blue)](https://www.npmjs.com/package/matter-history)
+[![powered by](https://img.shields.io/badge/powered%20by-node--ansi--logger-blue)](https://www.npmjs.com/package/node-ansi-logger)
+[![powered by](https://img.shields.io/badge/powered%20by-node--persist--manager-blue)](https://www.npmjs.com/package/node-persist-manager)
+
+---
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+If you like this project and find it useful, please consider giving it a star on [GitHub](https://github.com/Luligu/matterbridge-plugin-template) and sponsoring it.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="120"></a>
+
+> ## Periodical Updates
+>
+> Keeping your plugin repository aligned with the latest template is important for security, CI reliability, and developer experience. See the Periodical Updates section in the [README](README.md#periodical-updates) for guidance on what to periodically copy/update (e.g., `.devcontainer`, workflows, and tooling configs).
+
+## [2.2.1] - Dev branch
+
+### Changed
+
+- [vscode]: Update `.vscode/tasks.json` to v.1.0.5: add local flag to pack tasks and download install scripts before execution in Docker tasks.
+- [agents]: Update `.agents/rules/plugin-frontend.instructions.md` to v.1.0.2: document base path preservation under Home Assistant Ingress and trailing slash requirements.
+- [agents]: Update `.codex/config.toml` to v.1.0.6: document default permissions profile.
+- [scripts]: Update `scripts/git-sync-dev.mjs` to v.2.1.0: verify local dev includes origin/dev commits and use `--force-if-includes`.
+- [scripts]: Update `scripts/prepublish-clean.mjs` to v.2.2.0: strip package.json fields directly and enhance logging.
+- [package]: Bump `oxfmt` to v.0.75.0.
+- [package]: Bump `oxlint` to v.1.90.0.
+- [package]: Bump `oxlint-tsgolint` to v.7.0.2005.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.2.0] - 2026-10-23
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.11.0 with matter v.1.6.1.
+- [node]: Drop Node.js 20 support, matching matterbridge v.3.11.0. Supported versions are Node.js 22.13, 24 and 26.
+
+### Added
+
+- [agents]: Add the Copilot `Matterbridge` custom agent (`.github/agents/matterbridge.agent.md`) that works without subagents.
+
+### Changed
+
+- [vscode]: Update `.vscode/settings.json` to v.1.0.16: configure commit message instructions, exclude templates from Vitest discovery and refine terminal command approvals.
+- [vscode]: Add Bundle, Minify, Obfuscate, Pack and Docker install tasks to `.vscode/tasks.json`.
+- [gitignore]: Update `.gitignore` to v.1.0.5: ignore `tmp/`, `.DS_Store` and Windows `Zone.Identifier` files.
+- [lint]: Update `.oxlintrc.json` and `.oxfmtrc.json` to v.1.2.0: align shared ignore patterns.
+- [vitest]: Replace `vite.config.ts` with `vitest.config.ts` v.2.0.9 and update test and coverage exclusions.
+- [scripts]: Update `scripts/clean.mjs` and `scripts/deep-clean.mjs` to v.2.0.0: log removed paths, add dry-run support and expose importable entry points.
+- [scripts]: Update release, download, Git status, Git sync, prepublish, pruning, workflow cleanup and version helpers to v.2.0.0 with CLI previews and importable entry points.
+- [scripts]: Update `scripts/deep-clean.mjs` and `scripts/prepublish-clean.mjs` to v.2.1.0: also remove `tmp/` and `bun.lock`.
+- [workflows]: Update `build.yml` and `codecov.yml` to v.2.0.8 and `publish.yml` to v.2.0.7.
+- [agents]: Update the shared agent setup: `AGENTS.md`, `CLAUDE.md` and `.github/copilot-instructions.md` to v.1.0.7, `GEMINI.md` to v.1.0.1 and `.agents/README.md` to v.1.0.4.
+- [agents]: Update the `testing` rules to v.1.0.7, the `matterbridge` rules to v.1.0.3 and the `verify-agent-context` skill to v.1.0.5.
+- [agents]: Update `.claude/settings.json` to v.1.0.9, `.antigravity/settings.json` to v.1.0.6 and `.codex/rules/default.rules` to v.1.0.7.
+- [package]: Run `checkDependencies` and `updateDependencies` with `npx npm-check-updates@latest`.
+- [package]: Remove the `softReset:bun` script.
+- [package]: Bump `oxfmt` to v.0.74.0.
+- [package]: Bump `oxlint` to v.1.89.0.
+- [package]: Bump `oxlint-tsgolint` to v.7.0.2004.
+- [package]: Bump `vitest` to v.5.0.5.
+- [package]: Bump `@vitest/coverage-v8` to v.5.0.5.
+- [package]: Bump `@types/node` to v.26.6.5.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.1.4] - 2026-09-30
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.10.10 with matter v.1.6.0.
+
+### Added
+
+- [devcontainer]: Add [`Dev Container`](.devcontainer/README.md) v.2.2.0 with dual Node and Bun runtime support.
+- [agents]: Add a [`shared setup`](.agents/README.md) for all agents: OpenAI Codex, Claude Code, GitHub Copilot and Google Gemini / Antigravity.
+- [agents]: Add [`commit message instructions`](.github/commit-message-instructions.md) v.1.0.0 for the VS Code Copilot "Generate Commit Message" button (Conventional Commits).
+
+### Changed
+
+- [vscode]: Update `.vscode/settings.json` to v.1.0.13: point the Copilot "Generate Commit Message" button to `.github/commit-message-instructions.md`.
+- [styleguide]: Update [`STYLEGUIDE.md`](STYLEGUIDE.md) to v.1.1.0: align it with the lint and format config and add the Commit Messages and Changelog sections.
+- [scripts]: Update `scripts/clean.mjs` and `scripts/deep-clean.mjs` to v.1.3.0: log every removed path, add `--help` and `--version` and reject unknown arguments.
+- [package]: Upgrade package.
+- [package]: Bump `oxfmt` to v.0.71.0.
+- [package]: Bump `oxlint` to v.1.86.0.
+- [package]: Bump `oxlint-tsgolint` to v.7.0.2003.
+- [package]: Bump `vitest` to v.5.0.3.
+- [package]: Bump `@vitest/coverage-v8` to v.5.0.3.
+- [package]: Bump `@types/node` to v.26.6.3.
+- [package]: Bump `typescript` to v.7.0.2.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.1.3] - 2026-09-12
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.10.10 with matter v.1.6.0.
+
+### Added
+
+- [agents]: Add shared agents setup with Claude, Codex, Gemini (Google Antigravity) and Copilot [README](.agents/README.md).
+- [Dev Container]: Add Matterbridge Dev Container v.2.2.0 [README](.devcontainer/README.md).
+
+### Changed
+
+- [package]: Upgrade package.
+- [package]: Bump `@types/node` to v.24.13.4.
+- [package]: Bump `@vitest/coverage-v8` to v.5.0.0.
+- [package]: Bump `node-ansi-logger` to v.3.3.1.
+- [package]: Bump `node-persist-manager` to v.2.1.1.
+- [package]: Bump `oxfmt` to v.0.67.0.
+- [package]: Bump `oxlint` to v.1.82.0.
+- [package]: Bump `vitest` to v.5.0.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.1.2] - 2026-08-29
+
+### Added
+
+- [devcontainer]: Add `Dev Container` v.2.0.0 with dual Node and Bun runtime support.
+
+### Changed
+
+- [package]: Upgrade package.
+- [package]: Bump `oxfmt` to v.0.65.0.
+- [package]: Bump `oxlint` to v.1.80.0.
+- [package]: Bump `vitest` to v.4.1.11.
+- [package]: Bump `@types/node` to v.26.4.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.1.1] - 2026-08-14
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.10.0 with matter v.1.6.0.
+
+### Added
+
+- [chip]: Add chip-test toolchain agents instruction and chip-test runner.
+- [chip]: Add `chipTests.json`/`chipTests.md` with the generic device basic composition, conformance and default warnings tests (all tests pass ✅).
+- [frontend]: Add plugin-frontend agents instructions.
+- [readme]: Update README with additional instructions for CHIP tests and plugin frontend.
+
+### Changed
+
+- [package]: Bump `oxfmt` to v.0.63.0.
+- [package]: Bump `oxlint` to v.1.78.0.
+- [package]: Bump `oxlint-tsgolint` to v.7.0.2001.
+- [package]: Bump `@types/node` to v.26.2.0.
+- [package]: Update agents configs.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.1.0] - 2026-07-17
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.10.0 with matter v.1.6.0.
+- [jest]: Remove jest stack.
+
+### Changed
+
+- [package]: Apply uniform style.
+- [package]: Update dependencies.
+- [package]: Upgrade package.
+- [agents]: Update agent instructions.
+
+## [2.0.1] - 2026-07-05
+
+### Changed
+
+- [package]: Apply uniform style.
+- [package]: Update dependencies.
+- [package]: Upgrade package.
+- [agents]: Update agent instructions.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [2.0.0] - 2026-06-18
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.9.0 with matter v.1.5.1 and matter.js v.0.17.1.
+
+### Added
+
+- [codex]: Add `AGENTS.md` for Codex.
+- [codex]: Add `.codex\config.toml` configuration for Codex.
+- [codex]: Add `.codex\rules\default.rules` rules (sandbox) for Codex.
+
+- [readme]: Add a [Remove Jest guide](README.md#remove-jest) that deletes Jest files and dependencies, then promotes Vitest to the standard test scripts.
+- [readme]: Add a [Remove Vitest guide](README.md#remove-vitest) that deletes Vitest files and dependencies while retaining Jest as the standard test runner.
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.12 and the [new toolchain](README.md#repository-setup).
+- [workflow]: Bump `.github\workflows\build.yml` config to v.2.0.5.
+- [workflow]: Bump `.github\workflows\codecov.yml` config to v.2.0.6.
+- [workflow]: Bump `.github\workflows\publish.yml` config to v.2.0.5.
+- [oxlint]: Bump `oxlint` config to v.1.0.13.
+- [oxfmt]: Bump `oxfmt` config to v.1.0.4.
+- [devcontainer]: Bump `.devcontainer/devcontainer.json` config to v.1.0.4.
+- [package]: Bump `.vscode/extensions.json` config to v.1.0.4.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.1.0] - 2026-06-06
+
+### Added
+
+- [platform]: Add type checking to the platform config.
+- [test]: Add typed mocks in tests.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.23] - 2026-06-05
+
+### Breaking changes
+
+- [matterbridge]: Require matterbridge v.3.8.0 with matter v.1.5.1 and matter.js v.0.17.1.
+
+### Added
+
+- [codecov]: Add merge of Jest and Vitest coverage reports. This allows to run both Jest and Vitest tests in the same package and have a unified coverage report in Codecov.
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.11.
+
+- [package]: Bump `@eslint/json` to v.2.0.0.
+- [package]: Bump `@eslint/markdown` to v.8.0.2.
+- [package]: Bump `@types/node` to v.25.9.1.
+- [package]: Bump `@vitest/coverage-istanbul` to v.4.1.8.
+- [package]: Bump `@vitest/eslint-plugin` to v.1.6.19.
+- [package]: Bump `eslint` to v.10.4.1.
+- [package]: Bump `eslint-plugin-jsdoc` to v.63.0.1.
+- [package]: Bump `eslint-plugin-prettier` to v.5.5.6.
+- [package]: Bump `npm-check-updates` to v.22.2.2.
+- [package]: Bump `ts-jest` to v.29.4.11.
+- [package]: Bump `typescript-eslint` to v.8.60.1.
+- [package]: Bump `vitest` to v.4.1.8.
+
+- [oxlint]: Bump `oxlint` config to v.1.0.2.
+- [oxfmt]: Bump `oxfmt` config to v.1.0.2.
+- [jest]: Bump `jest` config to v.2.0.2.
+- [vitest]: Bump `vitest` config to v.2.0.5.
+- [eslint]: Bump `eslint` config to v.2.0.5.
+- [prettier]: Bump `.prettierignore` config to v.1.0.1.
+- [package]: Bump `.devcontainer/devcontainer.json` config to v.1.0.1.
+- [package]: Bump `.vscode/settings.json` config to v.1.0.1.
+- [package]: Bump `.vscode/extensions.json` config to v.1.0.1.
+- [workflow]: Bump `.github\workflows\build.yml` config to v.2.0.4.
+- [workflow]: Bump `.github\workflows\codecov.yml` config to v.2.0.4.
+- [workflow]: Bump `.github\workflows\publish.yml` config to v.2.0.4.
+
+- [claude]: Move CLAUDE.md in the repo root.
+- [claude]: Add .claude/settings.json with permissions configuration.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.22] - 2026-05-20
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.10.
+- [package]: Bump `eslint` to v.10.4.0.
+- [package]: Bump `@types/node` to v.25.9.1.
+- [package]: Bump `ts-jest` to v.29.4.10.
+- [package]: Bump `typescript-eslint` to v.8.59.4.
+- [package]: Bump `vitest` to v.4.1.7.
+- [package]: Bump `@vitest/coverage-v8` to v.4.1.7.
+- [package]: Update `.devcontainer/devcontainer.json`.
+- [package]: Update `.vscode/settings.json`.
+- [package]: Update `.vscode/extensions.json`.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.21] - 2026-05-12
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.9.
+- [package]: Bump `typescript-eslint` to v.8.59.3.
+- [package]: Bump `vitest` to v.4.1.6.
+- [package]: Refactor `scripts`.
+- [eslint]: Add `eslint` v.2.0.4 config.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.20] - 2026-05-09
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.8.
+- [package]: Add package script `typecheck`.
+- [package]: Add Node.js 26 to package `engines` field.
+- [jest]: Bump `jest` to v.30.4.2.
+- [vitest]: Add `vitest` v.2.0.3 config.
+- [agent]: Update `agent instructions`.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.19] - 2026-05-01
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.7.
+- [package]: Add package script `typecheck`.
+- [package]: Bump `typescript-eslint` to v.8.59.2.
+- [eslint]: Add `eslint` v.2.0.2 config.
+- [eslint]: Add `jest` v.2.0.1 config.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.18] - 2026-05-01
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump `typescript-eslint` to v.8.59.1.
+- [eslint]: Add `eslint` v.2.0.0 config.
+- [eslint]: Add `prettier` v.2.0.0 config.
+- [eslint]: Add `jest` v.2.0.0 config.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.17] - 2026-04-27
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.7.
+- [eslint]: Remove `eslint-plugin-promise` (not actively maintained) and add @typescript-eslint promise rules.
+- [package]: Remove `overrides` that was necessary for eslint-plugin-promise.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.16] - 2026-04-19
+
+### Changed
+
+- [package]: Preliminary compatibility update to `matterbridge 3.8.0`, matter 1.5.1 and matter.js 0.17.0.
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.6.
+- [package]: Bump `typescript` to v.6.0.3.
+- [package]: Bump `eslint` to v.10.2.1.
+- [package]: Bump `typescript-eslint` to v.8.59.0.
+- [package]: Add `.vscode\tasks.json`.
+- [package]: Add `.vscode\settings.json`.
+- [devcontainer]: Add `Claude Code for VS Code extension` to Dev Container.
+- [agent]: Add `.github\copilot-instructions.md` for copilot.
+- [agent]: Add `.claude\CLAUDE.md` for claude.
+- [agent]: Add agent custom instructions (`testing`) for copilot and claude.
+- [agent]: Add agent custom instructions (`matterbridge`) for copilot and claude.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.15] - 2026-04-07
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.5.
+- [package]: Bump `eslint` to v.10.2.0.
+- [package]: Bump `prettier` to v.3.8.2.
+- [package]: Bump `typescript-eslint` to v.8.58.1.
+- [package]: Bump `node-ansi-logger` to v.3.2.1.
+- [package]: Bump `node-persist-manager` to v.2.0.2.
+- [devcontainer]: Fix pull of new image.
+- [devcontainer]: Update VS Code settings.
+- [devcontainer]: Leave matterbridge scripts in the cloned repo.
+- [scripts]: Update mb-run script.
+- [scripts]: Update package watch script.
+- [scripts]: Add prune-releases script.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.14] - 2026-04-02
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump `typescript-eslint` to v.8.58.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.13] - 2026-03-24
+
+### Added
+
+- [package]: Add `CODE_OF_CONDUCT.md`.
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.4.
+- [package]: Bump `typescript` to v.6.0.2.
+- [package]: Bump `typescript-eslint` to v.8.58.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.12] - 2026-03-20
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.3.
+- [devcontainer]: Update `Dev Container` configuration.
+- [package]: Refactor `build.yml` to use matterbridge dev branch for push and main for pull requests.
+- [package]: Add `type checking` script for Jest tests.
+- [package]: Update actions versions in workflows.
+- [package]: Bump `eslint` to v.10.1.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.11] - 2026-03-16
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.2.
+- [package]: Bump `eslint` to v.10.0.3.
+- [package]: Bump `typescript-eslint` to v.8.57.1.
+- [package]: Add `@eslint/json`.
+- [package]: Add `@eslint/markdown`.
+- [package]: Add `CONTRIBUTING.md`.
+- [package]: Add `STYLEGUIDE.md`.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.10] - 2026-02-27
+
+### Added
+
+- [devContainer]: Add the new [dev container setup](README.md).
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.1.0.
+- [package]: Bump `eslint` to v.10.0.2.
+- [package]: Bump `typescript-eslint` to v.8.56.1.
+- [package]: Replace `eslint-plugin-import` with `eslint-plugin-simple-import-sort`.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.9] - 2026-02-17
+
+### Added
+
+- [select]: Add select system.
+- [schema]: Add schema.
+- [config]: Add defaut config.
+- [config]: Add new improved config style.
+
+### Changed
+
+- [package]: Bump `typescript-eslint` to v.8.56.0.
+- [eslint]: Use minimatch in ignores.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.8] - 2026-02-16
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to `automator` v.3.0.8.
+- [package]: Bump `node-ansi-logger` to v.3.2.0.
+- [package]: Bump `node-persist-manager` to v.2.0.1.
+- [package]: Bump `eslint` to v.10.0.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.7] - 2026-02-07
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to automator v.3.0.6.
+- [package]: Bump node-ansi-logger to v.3.2.0.
+- [vite]: Add cache under .cache/vite.
+- [workflow]: Migrate to trusted publishing / OIDC. Since you can authorize only one workflow with OIDC, publish.yml now does both the publishing with tag latest (on release) and with tag dev (on schedule or manual trigger).
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.6] - 2026-01-27
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to automator v.3.0.2.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.5] - 2026-01-14
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to automator v.3.0.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.4] - 2025-12-23
+
+### Added
+
+- [DevContainer]: Refactored Dev Container setup. The Matterbridge instance can now be paired on native Linux hosts or WSL 2 with Docker engine CLI integration. On Docker Desktop on Windows or macOS is not possible cause Docker Desktop runs inside a VM and not directly on the host so mDNS is not supported.
+- [DevContainer]: Since is now possible to pair from Dev Container, named volumes have been added to persist storage and plugins across rebuilds.
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Update to the current Matterbridge signatures.
+- [package]: Require Matterbridge v.3.4.0.
+- [package]: Bump package to automator v.2.1.0.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.3] - 2025-11-14
+
+### Changed
+
+- [package]: Update dependencies.
+- [package]: Bump package to automator v.2.0.12.
+- [jest]: Update jestHelpers to v.1.0.12.
+- [workflows]: Use shallow clones and --no-fund --no-audit for faster builds.
+- [package]: Update to the current Matterbridge signatures.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.2] - 2025-10-25
+
+### Changed
+
+- [package]: Bump package to automator v. 2.0.9.
+- [jest]: Update jestHelpers to v. 1.0.9.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.1] - 2025-10-17
+
+### Breaking Changes
+
+- [node]: Require node.js 20.x or 22.x or 24.x (LTS versions). Node.js 18.x is no longer supported.
+- [platform]: Require Matterbridge v.3.3.0.
+- [platform]: Upgrade to the new PlatformMatterbridge signature.
+
+### Changed
+
+- [package]: Bump package to automator version 2.0.8
+- [workflows]: Ignore any .md in build.yaml.
+- [workflows]: Ignore any .md in codeql.yaml.
+- [workflows]: Ignore any .md in codecov.yaml.
+- [template]: Update bug_report.md.
+- [jest]: Update jestHelpers to v. 1.0.8.
+- [workflows]: Improve speed on Node CI.
+- [devcontainer]: Add the plugin name to the container.
+- [devcontainer]: Improve performance of first build with shallow clone.
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
+
+## [1.0.0] - 2025-06-15
+
+- First release of the Matterbridge plugin template
+
+<a href="https://www.buymeacoffee.com/luligugithub"><img src="https://matterbridge.io/assets/bmc-button.svg" alt="Buy me a coffee" width="80"></a>
