@@ -146,13 +146,11 @@ export function toMatterBatteryPercent(value: ControlValue | undefined): number 
  * Edge cases:
  *  - a number -> on when it is not 0
  *  - a string -> on when it is `true`, `on`, `open` or `1`, in any case
- *  - undefined -> null
  *
- * @param {ControlValue | undefined} value The value.
- * @returns {boolean | null} Whether it is on, or null when there is no value.
+ * @param {ControlValue} value The value.
+ * @returns {boolean} Whether it is on.
  */
-export function toBoolean(value: ControlValue | undefined): boolean | null {
-  if (value === undefined) return null;
+export function toBoolean(value: ControlValue): boolean {
   if (typeof value === 'boolean') return value;
   if (typeof value === 'number') return value !== 0;
   return ['true', 'on', 'open', '1'].includes(value.trim().toLowerCase());

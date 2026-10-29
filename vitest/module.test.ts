@@ -236,7 +236,7 @@ describe('TuyaPlatform', () => {
     expect(state.devices[0]).toMatchObject({ status: 'offline', hasLan: false, error: expect.stringContaining('The device has no route') });
     expect(state.devices[0]).not.toHaveProperty('localKey');
     await expect(signedOut.listDevices()).rejects.toThrow('Sign in to your Tuya account first');
-    expect(await signedOut.probe(deskId)).toEqual({ status: 'failed', deviceId: deskId, message: 'Sign in to your Tuya account first' });
+    expect(await signedOut.probe(deskId)).toEqual({ status: 'signInRequired', deviceId: deskId, message: 'Sign in to your Tuya account first' });
     // Nothing to sync without an account.
     await signedOut.syncDevices();
     await signedOut.onShutdown();
@@ -464,8 +464,8 @@ describe('TuyaPlatform', () => {
     await vi.waitFor(async () =>
       expect((await platform.getSetupState()).devices.find((device) => device.deviceId === nodeDeviceId)).toMatchObject({ status: 'online', route: 'lan' }),
     );
-    // Without an account, a device the platform heard is checked on the LAN alone.
-    expect((await platform.probe(nodeDeviceId)).status).toBe('failed');
+    // Without an account there is no device list to check a device from, even one the platform hears.
+    expect((await platform.probe(nodeDeviceId)).status).toBe('signInRequired');
     // Without a list, a device saved keeps what the cloud listed of it before.
     const zigbee = storedDevice(nodeDeviceId);
     if (zigbee === undefined) throw new Error('No Zigbee device');
@@ -616,6 +616,75 @@ describe('TuyaPlatform', () => {
     await odd.onShutdown();
     // The test aggregator unregisters every device of every platform at once: only those of this one go.
     for (const device of odd.getDevices()) await odd.unregisterDevice(device);
+  });
+
+  test('should keep naming the controls of a running device by the entry it was built with, and take what is stored when the cloud lists nothing', async () => {
+    const edgeId = 'bf0000000000000060aa';
+    const bareId = 'bf0000000000000061aa';
+    net.dataPoints.set(edgeId, { ...plugDataPoints });
+    const edge = initializePlugin(
+      matterbridge,
+      log,
+      createConfig({
+        devices: [
+          createDeviceConfig(plugFile, { deviceId: edgeId, name: 'Edge', host: '10.0.0.20', version: '3.3' }),
+          createDeviceConfig(plugFile, { deviceId: bareId, name: 'Bare', localKey: undefined, isCloudOnly: true }),
+          createDeviceConfig(plugFile, { deviceId: 'bf0000000000000062aa', name: 'Gone again', catalogFile: 'removed_plug.yaml' }),
+        ],
+      }),
+    );
+    addMatterbridge(edge);
+    await edge.onStart();
+    const edgeEndpoint = (): MatterbridgeEndpoint | undefined => edge.getDevices().find((device) => device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel') === 'Edge');
+    const stored = (deviceId: string): TuyaDeviceConfig | undefined => (edge.config.devices as TuyaDeviceConfig[]).find((device) => device.deviceId === deviceId);
+    await vi.waitFor(() => expect(edgeEndpoint()?.getAttribute(OnOff, 'onOff')).toBe(true));
+
+    // A device stored without what the cloud lists keeps it so while the cloud lists nothing.
+    const bare = stored(bareId);
+    if (bare === undefined) throw new Error('No bare device');
+    await edge.saveDevice({ ...bare, name: 'Bare too' });
+    expect(stored(bareId)).toMatchObject({ name: 'Bare too' });
+    expect(stored(bareId)).not.toHaveProperty('localKey');
+    expect(stored(bareId)).not.toHaveProperty('cloudName');
+    expect(stored(bareId)).not.toHaveProperty('category');
+
+    // A new catalog entry waits for the restart: until then the controls are named by the entry the endpoints were built from.
+    const before = stored(edgeId);
+    if (before === undefined) throw new Error('No edge device');
+    net.dataPoints.set(edgeId, { ...plugDataPoints, '1': false });
+    await edge.saveDevice({ ...before, catalogFile: stripFile });
+    await vi.waitFor(() => expect(edgeEndpoint()?.getAttribute(OnOff, 'onOff')).toBe(false));
+    expect(restartRequired).toHaveBeenCalledTimes(1);
+    // A second change before the restart asks for it again, and notes the device once.
+    vi.mocked(log.notice).mockClear();
+    await edge.saveDevice({ ...before, catalogFile: stripFile, isComposed: false });
+    expect(restartRequired).toHaveBeenCalledTimes(2);
+    expect(log.notice).not.toHaveBeenCalledWith(expect.stringContaining('is built again with its new options'));
+
+    // A device with a route on the LAN follows a new address through the discovery: it needs no new client.
+    vi.mocked(createLocalTuyaClient).mockClear();
+    await edge.hearDevice({ deviceId: edgeId, host: '10.0.0.21', version: '3.3', productKey: 'x' });
+    expect(createLocalTuyaClient).not.toHaveBeenCalled();
+
+    // An account signed in starts again a device that could not start, and a list with no category and no local key adds neither.
+    const listed = net.listed;
+    const { localKey: _localKey, ...bareListed } = createCloudDevice(plugFile, { deviceId: bareId, name: 'Bare plug', category: '' });
+    net.listed = [bareListed];
+    await edge.signInDeveloper({ accessId: 'edgeproject', accessSecret: 'secret', dataCenter: 'eu' });
+    expect((await edge.getSetupState()).devices[2]).toMatchObject({ status: 'stopped', error: expect.stringContaining('has no entry from removed_plug.yaml') });
+    await edge.syncDevices();
+    expect(stored(bareId)).toMatchObject({ cloudName: 'Bare plug' });
+    expect(stored(bareId)).not.toHaveProperty('category');
+    expect(stored(bareId)).not.toHaveProperty('localKey');
+    // A device the last list does not have is listed again, and a session the cloud refuses says to sign in again.
+    const cloud = net.accounts.at(-1) as { listDevices: ReturnType<typeof vi.fn> };
+    cloud.listDevices.mockRejectedValueOnce(new TuyaError('SESSION_EXPIRED', 'The session expired'));
+    expect(await edge.probe('bf0000000000000063aa')).toMatchObject({ status: 'signInRequired', deviceId: 'bf0000000000000063aa' });
+    cloud.listDevices.mockRejectedValueOnce(new TuyaError('REQUEST_TIMED_OUT', 'The cloud did not answer'));
+    expect(await edge.probe('bf0000000000000063aa')).toMatchObject({ status: 'failed', deviceId: 'bf0000000000000063aa' });
+    net.listed = listed;
+    await edge.onShutdown();
+    for (const device of edge.getDevices()) await edge.unregisterDevice(device);
   });
 
   test('should log a device whose endpoints cannot be registered, and retry it', async () => {

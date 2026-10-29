@@ -27,7 +27,9 @@ import { log, setupTest } from 'matterbridge/test-utils/vitest';
 import { addDevice, aggregator, createServerNode, createTestEnvironment, startServerNode, stopServerNode } from 'matterbridge/test-utils/vitest/matter';
 import { TuyaError } from 'open-tuya';
 
+import { applyValues } from '../../src/accessory/matterState.js';
 import { type DeviceConnection, noRouteMessage, TuyaAccessory } from '../../src/accessory/tuyaAccessory.js';
+import { ignoreFailure } from '../../src/errors.js';
 import type { DeviceFeatures } from '../../src/features.js';
 import { getDeviceFeatures } from '../../src/features.js';
 import { EndpointIds } from '../../src/platform/endpointIds.js';
@@ -112,6 +114,7 @@ describe('TuyaAccessory', () => {
       const config = createDeviceConfig(plugFile, { deviceId: 'bf0000000000000001aa' });
       accessory = new TuyaAccessory({
         config,
+        entry: entryOf(plugFile),
         features: getDeviceFeatures(entryOf(plugFile)),
         productName: 'TopGreener TGWF115PRM',
         createConnection: (): DeviceConnection => connectionOf(client, { isOnLan: () => isOnLan }),
@@ -255,6 +258,7 @@ describe('TuyaAccessory', () => {
       const failing = createFakeClient({ device: { on: true } });
       const device = new TuyaAccessory({
         config: createDeviceConfig(plugFile, { deviceId: 'bf0000000000000009aa', name: 'Broken' }),
+        entry: entryOf(plugFile),
         features: getDeviceFeatures(entryOf(plugFile)),
         productName: 'Plug',
         createConnection: (): DeviceConnection => connectionOf(failing),
@@ -288,6 +292,7 @@ describe('TuyaAccessory', () => {
           hiddenFeatures: ['device.outlet3', 'device.outlet4', 'device.outlet5'],
           addedFeatures: ['device.childLock'],
         }),
+        entry: entryOf(stripFile),
         features: getDeviceFeatures(entryOf(stripFile)),
         productName: 'Mirabella Genio Smart 2Gnd',
         createConnection: (): DeviceConnection => connectionOf(client),
@@ -337,6 +342,7 @@ describe('TuyaAccessory', () => {
       });
       accessory = new TuyaAccessory({
         config: createDeviceConfig(multiSensorFile, { deviceId: 'bf0000000000000003aa', name: 'Hall', addedFeatures: ['indicator.on'] }),
+        entry: entryOf(multiSensorFile),
         features: getDeviceFeatures(entryOf(multiSensorFile)),
         productName: 'Motion sensor',
         createConnection: (): DeviceConnection => connectionOf(client),
@@ -389,6 +395,7 @@ describe('TuyaAccessory', () => {
       const client = createFakeClient({ device: { on: true, door: true, moisture: true, energyInKwh: 1.5, powerInKw: 'x', temperatureInC: 40 } });
       const accessory = new TuyaAccessory({
         config: createDeviceConfig(leakFile, { deviceId: 'bf0000000000000004aa', name: 'Washer' }),
+        entry: entryOf(leakFile),
         features,
         productName: 'Washer',
         createConnection: (): DeviceConnection => connectionOf(client),
@@ -416,6 +423,7 @@ describe('TuyaAccessory', () => {
         () =>
           new TuyaAccessory({
             config: createDeviceConfig(leakFile),
+            entry: entryOf(leakFile),
             features: { outlets: [], settingSwitches: [], sensors: [] },
             productName: 'Nothing',
             createConnection: (): undefined => undefined,
@@ -423,6 +431,58 @@ describe('TuyaAccessory', () => {
             vendorId,
           }),
       ).toThrow('The device has neither an outlet nor a sensor to show in Matter');
+    });
+  });
+
+  describe('a device whose work overlaps', () => {
+    test('should drop a push that waits behind a read once the device is disposed', async () => {
+      const client = createFakeClient({ device: { on: true } });
+      const accessory = new TuyaAccessory({
+        config: createDeviceConfig(plugFile, { deviceId: 'bf0000000000000005aa', name: 'Late' }),
+        entry: entryOf(plugFile),
+        features: getDeviceFeatures(entryOf(plugFile)),
+        productName: 'Late',
+        createConnection: (): DeviceConnection => connectionOf(client),
+        log,
+        vendorId,
+      });
+      await addAccessory(accessory);
+      await accessory.start();
+      expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true);
+      // A read the device is slow to answer holds the queue, and a push waits behind it.
+      let answer: (values: { device: { on: boolean } }) => void = ignoreFailure;
+      client.readControls.mockImplementationOnce(async () => new Promise((resolve) => (answer = resolve)));
+      const read = accessory.refresh();
+      await vi.waitFor(() => expect(client.readControls).toHaveBeenCalledTimes(2));
+      client.push({ device: { on: false } });
+      const disposed = accessory.dispose();
+      answer({ device: { on: true } });
+      // The read began before the dispose, and ends as it does.
+      expect(await read).toBe(true);
+      await disposed;
+      // The push turned the outlet off: dropped, it leaves the read's on.
+      expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true);
+    });
+
+    test('should skip a side unit the accessory has no endpoint for', async () => {
+      const client = createFakeClient({ device: { outlet1: true, outlet2: true } });
+      const accessory = new TuyaAccessory({
+        config: createDeviceConfig(stripFile, { deviceId: 'bf0000000000000006aa', name: 'Sparse', hiddenFeatures: ['device.outlet3', 'device.outlet4', 'device.outlet5'] }),
+        entry: entryOf(stripFile),
+        features: getDeviceFeatures(entryOf(stripFile)),
+        productName: 'Sparse',
+        createConnection: (): DeviceConnection => connectionOf(client),
+        log,
+        vendorId,
+      });
+      await addAccessory(accessory);
+      await accessory.start();
+      expect(accessory.sideEndpoints.get('device.outlet2')?.getAttribute(OnOff, 'onOff')).toBe(true);
+      // Endpoints that lack the second outlet: the main one is written, and the outlet it lacks is left alone.
+      await applyValues({ endpoint: accessory.endpoint, sideEndpoints: new Map() }, accessory.layout, { device: { outlet1: false, outlet2: false } });
+      expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(false);
+      expect(accessory.sideEndpoints.get('device.outlet2')?.getAttribute(OnOff, 'onOff')).toBe(true);
+      await accessory.dispose();
     });
   });
 });

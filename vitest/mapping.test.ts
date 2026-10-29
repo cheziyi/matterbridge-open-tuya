@@ -77,7 +77,6 @@ describe('mapping', () => {
     expect(toBoolean(0)).toBe(false);
     for (const text of ['true', ' ON ', 'open', '1']) expect(toBoolean(text)).toBe(true);
     expect(toBoolean('closed')).toBe(false);
-    expect(toBoolean(undefined)).toBeNull();
   });
 
   test('should join the name of a device and what an endpoint is in 32 characters, cutting the name', () => {

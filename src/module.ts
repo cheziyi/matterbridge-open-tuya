@@ -38,6 +38,7 @@ import {
   type TuyaClient,
   type TuyaCloudAccount,
   type TuyaCloudDevice,
+  type TuyaDeviceEntry,
   type TuyaDiscovery,
   TuyaError,
 } from 'open-tuya';
@@ -458,6 +459,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * @returns {Promise<ProbeResult>} `ready` with the entry, the features and the controls, or the failure that stands in the way.
    */
   async probe(deviceId: string): Promise<ProbeResult> {
+    const { cloud } = this;
+    // The device and its local key come from the device list of an account.
+    if (cloud === undefined) return { status: 'signInRequired', deviceId, message: 'Sign in to your Tuya account first' };
     if (!this.listed.has(deviceId)) {
       try {
         await this.readDevices();
@@ -470,10 +474,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     const stored = this.devices.find((candidate) => candidate.deviceId === deviceId);
     const gateway = findGateway(device, [...this.listed.values()]);
     const lan = stored?.isCloudOnly === true ? undefined : this.createLanRoute({ ...device, gatewayId: gateway?.deviceId, host: stored?.host, version: stored?.version });
-    const routes: TuyaClient[] = lan === undefined ? [] : [lan];
-    const { cloud } = this;
-    if (cloud !== undefined) routes.push(new CloudRoute(async () => cloud.createClient(deviceId)));
-    if (routes.length === 0) return { status: 'unreachable', deviceId, message: 'The device was not heard on your network, and no Tuya account is signed in' };
+    const routes: TuyaClient[] = [...(lan === undefined ? [] : [lan]), new CloudRoute(async () => cloud.createClient(deviceId))];
     const result = await probeDevice(device, routes, lan);
     if (result.status === 'signInRequired') this.rejectAccount();
     return result;
@@ -569,7 +570,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
         for (const device of this.devices) {
           if (device.deviceId !== found.deviceId && device.gatewayId !== found.deviceId) continue;
           const accessory = this.accessories.get(device.deviceId);
-          if (accessory !== undefined && !accessory.getStatus().hasLan && device.isCloudOnly !== true) await accessory.updateConnection(this.createConnectionFactory(device));
+          if (accessory !== undefined && !accessory.getStatus().hasLan && device.isCloudOnly !== true)
+            await accessory.updateConnection(this.createConnectionFactory(device, accessory.entry));
         }
       });
     } catch (error) {
@@ -666,7 +668,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     for (const device of this.devices) {
       const accessory = this.accessories.get(device.deviceId);
       if (accessory === undefined) await this.startDevice(device);
-      else await accessory.updateConnection(this.createConnectionFactory(device));
+      else await accessory.updateConnection(this.createConnectionFactory(device, accessory.entry));
     }
   }
 
@@ -805,13 +807,15 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * Build the factory of the client of a stored device: on the LAN first, through its gateway when it is behind one,
    * and through the cloud when it does not answer there
    *
+   * The controls are named by the entry the device was built with, which a new catalog entry chosen in the setup page
+   * replaces only once the device is built again, at the next start of Matterbridge.
+   *
    * @param {TuyaDeviceConfig} device The device.
+   * @param {TuyaDeviceEntry} entry The catalog entry its endpoints were built from.
    * @returns {DeviceConnectionFactory} The factory, which gives undefined while the device has no route.
    */
-  private createConnectionFactory(device: TuyaDeviceConfig): DeviceConnectionFactory {
+  private createConnectionFactory(device: TuyaDeviceConfig, entry: TuyaDeviceEntry): DeviceConnectionFactory {
     return (): DeviceConnection | undefined => {
-      const entry = findCatalogEntry(device.catalogFile);
-      if (entry === undefined) return undefined;
       const lan = device.isCloudOnly === true ? undefined : this.createLanRoute(device);
       const routes: TuyaClient[] = lan === undefined ? [] : [lan];
       const { cloud } = this;
@@ -860,7 +864,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       // built with, and gets its new ones at the next start.
       if (!hasSameExposure(before, device)) this.requireRestart(device);
       await accessory.updateConfig(device);
-      if (!hasSameConnection(before, device)) await accessory.updateConnection(this.createConnectionFactory(device));
+      if (!hasSameConnection(before, device)) await accessory.updateConnection(this.createConnectionFactory(device, accessory.entry));
     }
     const used = new Set(this.devices.map((device) => device.gatewayId));
     await this.closeGateways((gatewayId) => !used.has(gatewayId));
@@ -897,9 +901,10 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       const ids = new EndpointIds(await this.endpointIdStore.read(device));
       accessory = new TuyaAccessory({
         config: device,
+        entry,
         features: getDeviceFeatures(entry),
         productName: getProductName(entry, device.productKey),
-        createConnection: this.createConnectionFactory(device),
+        createConnection: this.createConnectionFactory(device, entry),
         log: this.log,
         vendorId: this.matterbridge.aggregatorVendorId,
         ids,

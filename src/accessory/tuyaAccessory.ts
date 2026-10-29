@@ -25,7 +25,7 @@ import type { MatterbridgeEndpoint } from 'matterbridge';
 import type { AnsiLogger } from 'matterbridge/logger';
 import { type ActionContext, Node } from 'matterbridge/matter';
 import { BridgedDeviceBasicInformation, OnOff } from 'matterbridge/matter/clusters';
-import type { ControlValues, RoutedTuyaClient, TuyaErrorCode } from 'open-tuya';
+import type { ControlValues, RoutedTuyaClient, TuyaDeviceEntry, TuyaErrorCode } from 'open-tuya';
 
 import { type TuyaDeviceConfig, withExposureOf } from '../config.js';
 import { getErrorCode, getErrorMessage } from '../errors.js';
@@ -61,6 +61,8 @@ export type DeviceConnectionFactory = () => DeviceConnection | undefined;
 /** What a device is built from. */
 export interface TuyaAccessoryOptions {
   config: TuyaDeviceConfig;
+  /** The catalog entry the controls of the device are named by, which its client is built with. */
+  entry: TuyaDeviceEntry;
   /** What the device can show, from its catalog entry. */
   features: DeviceFeatures;
   /** The name the product is sold under, as the catalog names it. */
@@ -139,6 +141,8 @@ export class TuyaAccessory implements AccessoryEndpoints {
   readonly sideEndpoints = new Map<string, MatterbridgeEndpoint>();
   /** How the features are laid out, as the endpoints were built from it. */
   readonly layout: AccessoryLayout;
+  /** The catalog entry the endpoints were built from: a client of the device names its controls by it until the device is built again. */
+  readonly entry: TuyaDeviceEntry;
   private config: TuyaDeviceConfig;
   private readonly log: AnsiLogger;
   private readonly identity: EndpointIdentity;
@@ -160,8 +164,6 @@ export class TuyaAccessory implements AccessoryEndpoints {
   private isDisposed = false;
   // Reads and writes run one after the other, so a read never overwrites what a write is about to send.
   private queue: Promise<void> = Promise.resolve();
-  // What is subscribed on each endpoint, to subscribe it again after a factory reset of the Matter node.
-  private readonly subscriptions = new Map<MatterbridgeEndpoint, (() => void)[]>();
   // Whether a read waits for the Matter node to be online, which the endpoints are written to only while it is.
   private isAwaitingOnline = false;
 
@@ -175,6 +177,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
    */
   constructor(options: TuyaAccessoryOptions) {
     this.config = options.config;
+    this.entry = options.entry;
     this.log = options.log;
     this.createConnection = options.createConnection;
     this.name = options.config.name;
@@ -308,9 +311,8 @@ export class TuyaAccessory implements AccessoryEndpoints {
     const connection = this.createConnection();
     this.connection = connection;
     if (connection === undefined) return;
-    this.stopListening = connection.client.onControls((values) => {
-      if (this.connection === connection) this.receiveValues(values);
-    });
+    // Closing the connection removes the listener, so a client that was replaced pushes nothing.
+    this.stopListening = connection.client.onControls((values) => this.receiveValues(values));
   }
 
   private async closeConnection(): Promise<void> {
@@ -338,11 +340,13 @@ export class TuyaAccessory implements AccessoryEndpoints {
   }
 
   /**
-   * Subscribe to an attribute of an endpoint, and again whenever the endpoint comes back from a factory reset
+   * Subscribe to the attribute of an endpoint, and again whenever the endpoint comes back from a factory reset
    *
    * Matter resets the node to factory defaults when its last fabric leaves, such as when the bridge is removed from the
    * last app it was in. The reset drops what was subscribed on each endpoint, so that the writes of the next app it is
    * paired with would reach nothing.
+   *
+   * Each endpoint subscribes to one attribute: the on/off of its outlet or its switch.
    *
    * @param {MatterbridgeEndpoint} endpoint The endpoint.
    * @param {() => void} subscribe Subscribes to the attribute, now and after each reset.
@@ -350,13 +354,6 @@ export class TuyaAccessory implements AccessoryEndpoints {
    */
   private listen(endpoint: MatterbridgeEndpoint, subscribe: () => void): void {
     subscribe();
-    const known = this.subscriptions.get(endpoint);
-    if (known !== undefined) {
-      known.push(subscribe);
-      return;
-    }
-    const subscriptions = [subscribe];
-    this.subscriptions.set(endpoint, subscriptions);
     let wasReset = false;
     endpoint.lifecycle.reset.on(() => {
       wasReset = true;
@@ -364,7 +361,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
     endpoint.lifecycle.ready.on(() => {
       if (!wasReset) return;
       wasReset = false;
-      for (const again of subscriptions) again();
+      subscribe();
       if (endpoint === this.endpoint) this.log.info(`"${this.name}" is subscribed again after the Matter node was reset`);
       // The reset put every attribute back to its default: the state of the device replaces them once the node is online.
       void this.refresh();

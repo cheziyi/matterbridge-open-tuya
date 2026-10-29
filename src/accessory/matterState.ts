@@ -86,8 +86,7 @@ async function applyUnit(endpoint: MatterbridgeEndpoint, unit: LayoutUnit, value
   const value = readValue(values, unit.feature);
   if (value === undefined) return;
   if (unit.type !== 'sensor') {
-    const isOn = toBoolean(value);
-    if (isOn !== null) await endpoint.updateAttribute(OnOff, 'onOff', isOn);
+    await endpoint.updateAttribute(OnOff, 'onOff', toBoolean(value));
     return;
   }
   const { kind } = unit.feature;
@@ -102,7 +101,6 @@ async function applyUnit(endpoint: MatterbridgeEndpoint, unit: LayoutUnit, value
     if (illuminance !== null) await endpoint.updateAttribute(IlluminanceMeasurement, 'measuredValue', illuminance);
   } else {
     const isDetected = toBoolean(value);
-    if (isDetected === null) return;
     if (kind === 'occupancy') await endpoint.updateAttribute(OccupancySensing, 'occupancy', { occupied: isDetected });
     // A contact sensor holds true while it is closed: the device reports whether it is open.
     else if (kind === 'contact') await endpoint.updateAttribute(BooleanState, 'stateValue', !isDetected);

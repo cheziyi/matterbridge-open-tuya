@@ -67,6 +67,7 @@ describe('a device when the Matter node is reset to factory defaults', () => {
     const config = createDeviceConfig(stripFile, { name: 'Strip', hiddenFeatures: ['device.outlet3', 'device.outlet4', 'device.outlet5'] });
     accessory = new TuyaAccessory({
       config,
+      entry: entryOf(stripFile),
       features: getDeviceFeatures(entryOf(stripFile)),
       productName: 'Strip',
       createConnection: (): DeviceConnection => connectionOf(client),
@@ -112,5 +113,22 @@ describe('a device when the Matter node is reset to factory defaults', () => {
     expect(client.writeControls).toHaveBeenNthCalledWith(2, { device: { outlet2: false } });
     // Each write was taken once: the reset left no subscription behind twice.
     expect(client.writeControls).toHaveBeenCalledTimes(2);
+  });
+
+  test('should leave the reachability to the read once the node is back, when a read fails while the node goes offline', async () => {
+    const warn = vi.spyOn(log, 'warn');
+    // A first failure while the node is online, which is not enough to call the device unreachable.
+    client.readControls.mockRejectedValueOnce(new Error('no answer'));
+    expect(await accessory.refresh()).toBe(false);
+    expect(accessory.getStatus().isReachable).toBe(true);
+    // The second fails as the node goes offline for a reset: nothing is written to the endpoints then.
+    client.readControls.mockImplementationOnce(async () => new Promise((_resolve, reject) => server.lifecycle.offline.once(() => reject(new Error('no answer')))));
+    const read = accessory.refresh();
+    await vi.waitFor(() => expect(client.readControls).toHaveBeenCalledTimes(2));
+    await server.erase();
+    expect(await read).toBe(false);
+    expect(warn).toHaveBeenCalledWith('"Strip" is unreachable: no answer');
+    // Once the node is online, the device is read again, and answers.
+    await vi.waitFor(() => expect(accessory.getStatus()).toMatchObject({ isReachable: true, lastError: undefined }), { timeout: 5000 });
   });
 });
