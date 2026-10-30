@@ -4,7 +4,7 @@
  * @author Calvin Che
  */
 
-import type { TuyaDeviceEntry } from 'open-tuya';
+import { MODEL_CATEGORIES as modelCategories, type TuyaDeviceEntry } from 'open-tuya';
 
 import {
   createModelEntry,
@@ -14,6 +14,7 @@ import {
   getEntrySupport,
   getProductName,
   labelControl,
+  MODEL_CATEGORIES,
   pickSupportedEntry,
   readValue,
 } from '../src/features.js';
@@ -163,8 +164,14 @@ describe('device models', () => {
 
   test('should build nothing for a category the plugin does not name by a model, or a model it knows nothing of', () => {
     expect(createModelEntry(motionModel, 'dj')).toBeUndefined();
+    // A plug's model knows its switches but not its meter: the catalog names it.
+    expect(createModelEntry({ '1': { code: 'switch_1', type: 'boolean' } }, 'cz')).toBeUndefined();
     expect(createModelEntry(motionModel, 'toString')).toBeUndefined();
     expect(createModelEntry({ '1': { code: 'work_mode', type: 'enum' } }, 'pir')).toBeUndefined();
+  });
+
+  test('should name a product for each category open-tuya names by a model, and no other', () => {
+    expect(Object.keys(MODEL_CATEGORIES).toSorted()).toEqual([...modelCategories].toSorted());
   });
 
   test('should find the entry of a stored device from its catalog file or from its model', () => {

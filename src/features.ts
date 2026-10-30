@@ -272,15 +272,13 @@ export function findCatalogEntry(file: string): TuyaDeviceEntry | undefined {
 
 /**
  * The Tuya categories whose devices the plugin names by the cloud's model of the device, when the catalog does not
- * list their product, and the product name each is shown with. A device of another category, such as a light or a
- * heater, can report a temperature too, but is not one of these kinds.
+ * list their product, and the product name each is shown with: the sensors open-tuya's `MODEL_CATEGORIES` lists. The
+ * model reads what a sensor is for, but not a plug's meter nor a heater's set point: a device of another category is
+ * left to the catalog entry that names most of its data points.
  */
 export const MODEL_CATEGORIES: Readonly<Record<string, string>> = {
-  cz: 'Plug',
   hps: 'Presence Sensor',
-  kg: 'Switch',
   mcs: 'Contact Sensor',
-  pc: 'Power Strip',
   pir: 'Motion Sensor',
   sj: 'Water Leak Sensor',
   wsdcg: 'Temperature and Humidity Sensor',
