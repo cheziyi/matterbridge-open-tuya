@@ -82,7 +82,7 @@ export function draftsFromDevices(devices: readonly ListedDevice[]): Draft[] {
       isNew: true,
       hiddenFeatures: [],
       addedFeatures: [],
-      isComposed: true,
+      isComposed: false,
     };
   });
 }

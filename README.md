@@ -98,7 +98,7 @@ flowchart TD
 
 ### One device or several
 
-A device is one device in Matter by default, with its other outlets, sensors and switches as parts of it: they move between the rooms of a Matter app with it, and are unreachable when it is. Untick **Show it as one device** in its options to make each of them a device of its own, named after the device and what it is, such as `Desk Strip Outlet 2`, for a Matter app that shows the parts of a device poorly.
+The setup page makes each of a device's other outlets, sensors and switches a device of its own by default, named after the device and what it is, such as `Desk Strip Outlet 2`, since a Matter app may show the parts of a device poorly. Tick **Show it as one device** in its options to make them parts of the device instead, what Matter calls a composed device: they move between the rooms of a Matter app with it, and are unreachable when it is.
 
 ## Connection
 
