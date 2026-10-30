@@ -45,6 +45,8 @@ export interface Draft extends Exposure {
   isNew: boolean;
   /** The catalog entry the controls are named by, once the plugin found it. */
   catalogFile?: string;
+  /** The cloud's model of the device, which the controls are named by when the catalog does not list its product. */
+  model?: ProbeResult['model'];
   productName?: string;
   /** What the device can show in Matter, once the plugin read it. */
   features?: DeviceFeatures;

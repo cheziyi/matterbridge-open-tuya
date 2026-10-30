@@ -251,13 +251,16 @@ export async function check(draft: Draft): Promise<void> {
   const { result } = reply;
   draft.probe = result;
   if (result.status === 'signInRequired') await refreshState();
-  if (result.status === 'ready' && result.features !== undefined && result.catalogFile !== undefined) {
+  if (result.status === 'ready' && result.features !== undefined && (result.catalogFile !== undefined || result.model !== undefined)) {
     draft.features = result.features;
     draft.values = result.values;
     draft.productName = result.productName;
-    // A device the catalog now names by another entry has other features: the options are fitted to the ones it has.
-    if (draft.catalogFile !== undefined && draft.catalogFile !== result.catalogFile) Object.assign(draft, { hiddenFeatures: [], addedFeatures: [] });
+    // A device now named by another entry has other features: the options are fitted to the ones it has.
+    const hadEntry = draft.catalogFile !== undefined || draft.model !== undefined;
+    if (hadEntry && (draft.catalogFile !== result.catalogFile || JSON.stringify(draft.model) !== JSON.stringify(result.model)))
+      Object.assign(draft, { hiddenFeatures: [], addedFeatures: [] });
     draft.catalogFile = result.catalogFile;
+    draft.model = result.model;
     Object.assign(draft, fitExposure(pickExposure(draft), result.features));
     view.screen = 'options';
   }
@@ -278,7 +281,7 @@ export async function saveDraft(draft: Draft): Promise<void> {
     render();
     return;
   }
-  if (draft.catalogFile === undefined) return;
+  if (draft.catalogFile === undefined && draft.model === undefined) return;
   const { device } = draft;
   // An empty host is left out: the plugin finds the device by its broadcasts. A device on the cloud alone needs none.
   const hasHost = !draft.isCloudOnly && draft.host !== '';
@@ -287,6 +290,9 @@ export async function saveDraft(draft: Draft): Promise<void> {
     name,
     productKey: device.productKey,
     catalogFile: draft.catalogFile,
+    // A model names the controls by their codes in the device's category, which the plugin checks against the device list.
+    model: draft.model,
+    category: device.category,
     ...fitExposure(pickExposure(draft), draft.features ?? { outlets: [], settingSwitches: [], sensors: [] }),
     host: hasHost ? draft.host : undefined,
     version: hasHost ? draft.version : undefined,

@@ -23,7 +23,16 @@
 
 import type { BasePlatformConfig } from 'matterbridge';
 import { isValidBoolean, isValidNumber, isValidObject, isValidString } from 'matterbridge/utils';
-import { type AppCloudSession, type DEVELOPER_DATA_CENTERS, type DeveloperDataCenter, PROTOCOL_VERSIONS, type ProtocolVersion } from 'open-tuya';
+import {
+  type AppCloudSession,
+  type DEVELOPER_DATA_CENTERS,
+  type DeveloperDataCenter,
+  MODEL_TYPES,
+  PROTOCOL_VERSIONS,
+  type ProtocolVersion,
+  type TuyaDeviceModel,
+  type TuyaModelDataPoint,
+} from 'open-tuya';
 
 /** The data centers of the Tuya developer platform, such as `eu`. */
 export const DATA_CENTERS = ['cn', 'us', 'us-e', 'eu', 'eu-w', 'in', 'sg'] as const satisfies readonly (keyof typeof DEVELOPER_DATA_CENTERS)[];
@@ -87,8 +96,10 @@ export interface TuyaDeviceConfig extends TuyaDeviceExposure {
   deviceId: string;
   /** The ID of the product, which the catalog matches the device by. */
   productKey: string;
-  /** The tuya-local file the catalog entry the controls are named by was converted from, such as `smartplugv1.yaml`. */
-  catalogFile: string;
+  /** The tuya-local file the catalog entry the controls are named by was converted from, such as `smartplugv1.yaml`. A device has this or `model`. */
+  catalogFile?: string;
+  /** What each data point stands for, as the cloud's model of the device says, for a device whose product the catalog does not list: its controls are named by their codes, read in its `category`. A device has this or `catalogFile`. */
+  model?: TuyaDeviceModel;
   /** The name of the device in the Smart Life app, as the cloud lists it now. The setup page shows it to tell the device apart, and Matter never sees it. */
   cloudName?: string;
   /** Tuya's code for the kind of device, such as `cz` for a plug. */
@@ -127,6 +138,10 @@ export const meterFeatureId = 'meter';
 const deviceIdPattern = /^[A-Za-z0-9_-]{1,32}$/;
 const productKeyPattern = /^[A-Za-z0-9_-]{1,64}$/;
 const catalogFilePattern = /^[A-Za-z0-9_.-]{1,128}\.yaml$/;
+const dataPointIdPattern = /^\d{1,3}$/;
+const modelCodePattern = /^[A-Za-z0-9_]{1,64}$/;
+// Bounds what a stored model can hold: a data point ID has three digits at most.
+const maxModelDataPoints = 999;
 const featureIdPattern = /^[A-Za-z0-9_]{1,64}(?:\.[A-Za-z0-9_]{1,64})?$/;
 // Dot-separated labels of letters, digits and inner dashes, which an IPv4 address is too.
 const hostPattern = /^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$/;
@@ -247,27 +262,70 @@ function parseFeatureIds(value: unknown): string[] | undefined {
 }
 
 /**
+ * Read one data point of a stored model
+ *
+ * @param {unknown} value The stored value.
+ * @returns {TuyaModelDataPoint | undefined} The data point, without the fields that are not valid, or undefined when its code or its type is not valid.
+ */
+function parseModelDataPoint(value: unknown): TuyaModelDataPoint | undefined {
+  if (!isValidObject(value)) return undefined;
+  const raw: Record<string, unknown> = { ...value };
+  if (typeof raw.code !== 'string' || !modelCodePattern.test(raw.code) || !isMember(MODEL_TYPES, raw.type)) return undefined;
+  const dataPoint: TuyaModelDataPoint = { code: raw.code, type: raw.type };
+  if (Array.isArray(raw.range) && raw.range.every((item) => isValidString(item, 1, maxFieldLength))) dataPoint.range = [...raw.range];
+  for (const key of ['min', 'max', 'step', 'scale'] as const) {
+    const number = raw[key];
+    if (isValidNumber(number)) dataPoint[key] = number;
+  }
+  if (isValidString(raw.unit, 1, maxFieldLength)) dataPoint.unit = raw.unit;
+  return dataPoint;
+}
+
+/**
+ * Read a stored model of a device
+ *
+ * @param {unknown} value The stored value.
+ * @returns {TuyaDeviceModel | undefined} The model, or undefined when it is not an object of data points by ID, or one of them is not valid.
+ */
+function parseModel(value: unknown): TuyaDeviceModel | undefined {
+  if (!isValidObject(value)) return undefined;
+  const entries = Object.entries(value);
+  if (entries.length === 0 || entries.length > maxModelDataPoints) return undefined;
+  const model: Record<string, TuyaModelDataPoint> = {};
+  for (const [id, raw] of entries) {
+    const dataPoint = parseModelDataPoint(raw);
+    if (!dataPointIdPattern.test(id) || dataPoint === undefined) return undefined;
+    model[id] = dataPoint;
+  }
+  return model;
+}
+
+/**
  * Parse one stored device
  *
- * A device needs a name, a device ID, a product key and a catalog file, and every other field falls back to its
- * default. A setting added later is never required, and its default is what the plugin did before it existed.
+ * A device needs a name, a device ID, a product key, and a catalog file or a model with its category, and every other
+ * field falls back to its default. A setting added later is never required, and its default is what the plugin did
+ * before it existed.
  *
  * Edge cases:
  *  - a setting that is stored but not valid falls back like one that is missing, and is reported
  *  - a host without a valid version, or a version without a host, is dropped and reported: the discovery finds the device
  *  - a gateway without a node ID, or a node ID without a gateway, is dropped
+ *  - a catalog file and a model -> the catalog file, and the model is dropped
  *
  * @param {unknown} value The stored value.
  * @param {(message: string) => void} [report] Called once for each setting that is stored but not valid.
- * @returns {TuyaDeviceConfig | undefined} The device, or undefined when one of those four is missing or not valid.
+ * @returns {TuyaDeviceConfig | undefined} The device, or undefined when one of those is missing or not valid.
  */
 export function parseDeviceConfig(value: unknown, report?: (message: string) => void): TuyaDeviceConfig | undefined {
   if (!isValidObject(value)) return undefined;
   const raw: Record<string, unknown> = { ...value };
   const name = normalizeDeviceName(raw.name);
   if (name === undefined || !isValidDeviceId(raw.deviceId)) return undefined;
-  if (typeof raw.productKey !== 'string' || !productKeyPattern.test(raw.productKey) || typeof raw.catalogFile !== 'string' || !catalogFilePattern.test(raw.catalogFile))
-    return undefined;
+  if (typeof raw.productKey !== 'string' || !productKeyPattern.test(raw.productKey)) return undefined;
+  const catalogFile = typeof raw.catalogFile === 'string' && catalogFilePattern.test(raw.catalogFile) ? raw.catalogFile : undefined;
+  const model = catalogFile === undefined && isValidString(raw.category, 1, maxFieldLength) ? parseModel(raw.model) : undefined;
+  if (catalogFile === undefined && model === undefined) return undefined;
   const features = (key: 'hiddenFeatures' | 'addedFeatures'): string[] => {
     const ids = parseFeatureIds(raw[key]);
     if (ids === undefined && raw[key] !== undefined) report?.(`"${name}" has the ${key} ${JSON.stringify(raw[key])}, which is not valid: none is used instead`);
@@ -280,7 +338,7 @@ export function parseDeviceConfig(value: unknown, report?: (message: string) => 
     name,
     deviceId: raw.deviceId,
     productKey: raw.productKey,
-    catalogFile: raw.catalogFile,
+    ...(catalogFile === undefined ? { model } : { catalogFile }),
     hiddenFeatures: features('hiddenFeatures'),
     addedFeatures: features('addedFeatures'),
     isComposed,
@@ -327,7 +385,7 @@ export function parseDeviceConfigs(value: unknown, report?: (message: string) =>
     const device = parseDeviceConfig(entry, report);
     if (device === undefined) {
       report?.(
-        'A stored device has no valid name, device ID, product key or catalog file and is ignored. It stays in the configuration as it is until a device with its name or its device ID is added in the setup page',
+        'A stored device has no valid name, device ID, product key, or catalog file or model, and is ignored. It stays in the configuration as it is until a device with its name or its device ID is added in the setup page',
       );
     } else if (devices.some((other) => other.name === device.name)) {
       report?.(`A second stored device is named "${device.name}" and is ignored: no two devices share a name`);
@@ -377,6 +435,18 @@ export function withoutLocalKey<T extends { localKey?: string }>(value: T): Omit
 }
 
 /**
+ * Tell whether two stored devices name their controls by the same entry
+ *
+ * @param {TuyaDeviceConfig} left One device.
+ * @param {TuyaDeviceConfig} right The other device.
+ * @returns {boolean} True when both have the same catalog file, or the same model in the same category.
+ */
+export function hasSameEntry(left: TuyaDeviceConfig, right: TuyaDeviceConfig): boolean {
+  if (left.catalogFile !== undefined || right.catalogFile !== undefined) return left.catalogFile === right.catalogFile;
+  return left.category === right.category && JSON.stringify(left.model) === JSON.stringify(right.model);
+}
+
+/**
  * Tell whether two stored devices are reached the same way
  *
  * @param {TuyaDeviceConfig} left One device.
@@ -386,7 +456,7 @@ export function withoutLocalKey<T extends { localKey?: string }>(value: T): Omit
 export function hasSameConnection(left: TuyaDeviceConfig, right: TuyaDeviceConfig): boolean {
   return (
     left.deviceId === right.deviceId &&
-    left.catalogFile === right.catalogFile &&
+    hasSameEntry(left, right) &&
     left.nodeId === right.nodeId &&
     left.gatewayId === right.gatewayId &&
     left.host === right.host &&
@@ -406,10 +476,7 @@ export function hasSameConnection(left: TuyaDeviceConfig, right: TuyaDeviceConfi
 export function hasSameExposure(left: TuyaDeviceConfig, right: TuyaDeviceConfig): boolean {
   const sameIds = (a: readonly string[], b: readonly string[]): boolean => a.toSorted().join() === b.toSorted().join();
   return (
-    left.catalogFile === right.catalogFile &&
-    left.isComposed === right.isComposed &&
-    sameIds(left.hiddenFeatures, right.hiddenFeatures) &&
-    sameIds(left.addedFeatures, right.addedFeatures)
+    hasSameEntry(left, right) && left.isComposed === right.isComposed && sameIds(left.hiddenFeatures, right.hiddenFeatures) && sameIds(left.addedFeatures, right.addedFeatures)
   );
 }
 
@@ -421,12 +488,13 @@ export function hasSameExposure(left: TuyaDeviceConfig, right: TuyaDeviceConfig)
  *
  * @param {TuyaDeviceConfig} device The device, whose other settings are kept.
  * @param {TuyaDeviceConfig} source The device whose exposure settings are taken.
- * @returns {TuyaDeviceConfig} The device with the exposure settings and the catalog entry of the source.
+ * @returns {TuyaDeviceConfig} The device with the exposure settings and the catalog entry or the model of the source.
  */
 export function withExposureOf(device: TuyaDeviceConfig, source: TuyaDeviceConfig): TuyaDeviceConfig {
+  const { catalogFile: _catalogFile, model: _model, ...rest } = device;
   return {
-    ...device,
-    catalogFile: source.catalogFile,
+    ...rest,
+    ...(source.catalogFile === undefined ? { model: source.model, category: source.category } : { catalogFile: source.catalogFile }),
     isComposed: source.isComposed,
     hiddenFeatures: [...source.hiddenFeatures],
     addedFeatures: [...source.addedFeatures],

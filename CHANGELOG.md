@@ -12,3 +12,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - [devices]: Reach each device on the LAN first, found by the discovery or at a host given, and through the Tuya cloud otherwise, and the devices behind a gateway through the gateway.
 - [setup]: Sign in by scanning a QR code with the Smart Life app, or with a cloud project of the Tuya developer platform.
 - [setup]: Add the guided setup page: find the devices of the account, check each one, and choose its name and how it appears in Matter.
+- [setup]: Name the controls of a plug, a power strip, a wall switch or a sensor whose product the catalog does not list by the Tuya cloud's model of the device, before matching the catalog by its data points alone, which took a motion sensor for a water leak sensor.

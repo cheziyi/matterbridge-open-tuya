@@ -19,10 +19,11 @@ import {
   parseAccountConfig,
   parseDeviceConfig,
   parseDeviceConfigs,
+  hasSameEntry,
   withExposureOf,
   withoutLocalKey,
 } from '../src/config.js';
-import { createDeviceConfig, plugFile, stripFile } from './fakeTuya.js';
+import { createDeviceConfig, createModelDeviceConfig, motionModel, plugFile, stripFile } from './fakeTuya.js';
 
 const session = { endpoint: 'https://apigw.tuyaeu.com', accessToken: 'access', refreshToken: 'refresh', expiresAtInMs: 1_000_000 };
 
@@ -156,5 +157,47 @@ describe('config', () => {
     const desk = createDeviceConfig(stripFile);
     const other = createDeviceConfig(plugFile, { name: 'Hall', isComposed: false, hiddenFeatures: ['meter'], addedFeatures: ['x.on'] });
     expect(withExposureOf(desk, other)).toEqual({ ...desk, catalogFile: plugFile, isComposed: false, hiddenFeatures: ['meter'], addedFeatures: ['x.on'] });
+  });
+  test('should read a device stored with the model of the device and its category, instead of a catalog file', () => {
+    const motion = createModelDeviceConfig();
+    expect(parseDeviceConfig(motion)).toEqual(motion);
+    // The catalog file names the controls when both are stored.
+    expect(parseDeviceConfig({ ...motion, catalogFile: plugFile })).toEqual({ ...createModelDeviceConfig({ catalogFile: plugFile }), model: undefined });
+    // A model needs its category, to know what its codes stand for.
+    expect(parseDeviceConfig({ ...motion, category: undefined })).toBeUndefined();
+  });
+
+  test('should keep the valid fields of a stored model, and refuse a model with a data point it cannot read', () => {
+    const read = (model: unknown): unknown => parseDeviceConfig(createModelDeviceConfig({ model: model as never }))?.model;
+    expect(read({ '7': { code: 'temp_current', type: 'integer', min: '0', scale: 1, unit: '', range: ['a', 2] } })).toEqual({
+      '7': { code: 'temp_current', type: 'integer', scale: 1 },
+    });
+    expect(read({})).toBeUndefined();
+    expect(read('model')).toBeUndefined();
+    expect(read({ x: motionModel['1'] })).toBeUndefined();
+    expect(read({ '1': { code: 'pir', type: 'float' } })).toBeUndefined();
+    expect(read({ '1': { code: 'bad code', type: 'enum' } })).toBeUndefined();
+    expect(read({ '1': 'pir' })).toBeUndefined();
+    expect(read(Object.fromEntries(Array.from({ length: 1000 }, (_, index) => [String(index), motionModel['1']])))).toBeUndefined();
+  });
+
+  test('should compare the entries of two devices by their catalog file, or by their model and its category', () => {
+    const motion = createModelDeviceConfig();
+    const plug = createDeviceConfig(plugFile);
+    expect(hasSameEntry(plug, { ...plug, name: 'Hall' })).toBe(true);
+    expect(hasSameEntry(plug, createDeviceConfig(stripFile))).toBe(false);
+    expect(hasSameEntry(plug, motion)).toBe(false);
+    expect(hasSameEntry(motion, { ...motion, model: { ...motionModel } })).toBe(true);
+    expect(hasSameEntry(motion, { ...motion, category: 'hps' })).toBe(false);
+    expect(hasSameEntry(motion, { ...motion, model: { '1': motionModel['1'] } })).toBe(false);
+  });
+
+  test('should take the model and the category of another device, in place of a catalog file', () => {
+    const desk = createDeviceConfig(stripFile, { category: 'pc' });
+    const motion = createModelDeviceConfig({ isComposed: false });
+    const { catalogFile: _catalogFile, ...rest } = desk;
+    expect(withExposureOf(desk, motion)).toEqual({ ...rest, model: motionModel, category: 'pir', isComposed: false });
+    const { model: _model, ...plain } = motion;
+    expect(withExposureOf(motion, desk)).toEqual({ ...plain, catalogFile: stripFile, isComposed: true });
   });
 });
