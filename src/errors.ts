@@ -80,6 +80,7 @@ const codeDescriptions: Partial<Readonly<Record<TuyaErrorCode, string>>> = {
   SESSION_EXPIRED: 'The Tuya cloud no longer accepts the sign in: sign in again',
   RATE_LIMITED: 'The Tuya cloud was asked too often: wait a minute, then try again',
   PERMISSION_DENIED: 'The Tuya developer platform refused the request: check the IoT Core plan and the API services of the cloud project',
+  DEVICE_OFFLINE: 'The Tuya cloud says the device is offline: check that it is plugged in and online in the Smart Life app',
   QR_CODE_EXPIRED: 'The QR code expired: ask for a new one',
   DISCOVERY_FAILED: 'Another program holds a port the discovery of devices on the LAN listens on',
 };

@@ -63,7 +63,7 @@ describe('probe', () => {
       return route;
     };
     expect(await probeDevice(plug, [failing(new TuyaError('SESSION_EXPIRED', 'sign in'))])).toMatchObject({ status: 'signInRequired' });
-    for (const code of ['CONNECTION_FAILED', 'CONNECTION_LOST', 'REQUEST_TIMED_OUT'] as const) {
+    for (const code of ['CONNECTION_FAILED', 'CONNECTION_LOST', 'REQUEST_TIMED_OUT', 'DEVICE_OFFLINE'] as const) {
       expect(await probeDevice(plug, [failing(new TuyaError(code, 'no answer'))])).toMatchObject({ status: 'unreachable' });
     }
     const failed = await probeDevice(plug, [failing(new Error('boom'))]);

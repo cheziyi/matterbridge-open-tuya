@@ -114,7 +114,7 @@ function classifyFailure(error: unknown, deviceId: string): ProbeResult {
   const message = describeError(error);
   const code = getErrorCode(error);
   if (code === 'SESSION_EXPIRED') return { status: 'signInRequired', deviceId, message };
-  if (code === 'CONNECTION_FAILED' || code === 'CONNECTION_LOST' || code === 'REQUEST_TIMED_OUT') return { status: 'unreachable', deviceId, message };
+  if (code === 'CONNECTION_FAILED' || code === 'CONNECTION_LOST' || code === 'REQUEST_TIMED_OUT' || code === 'DEVICE_OFFLINE') return { status: 'unreachable', deviceId, message };
   return { status: 'failed', deviceId, message };
 }
 

@@ -125,7 +125,7 @@
   "dependencies": {
     "node-ansi-logger": "3.3.1",
     "node-persist-manager": "2.1.1",
-    "open-tuya": "0.3.0"
+    "open-tuya": "0.3.1"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
