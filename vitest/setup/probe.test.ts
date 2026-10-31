@@ -7,7 +7,7 @@
 import { TuyaError } from 'open-tuya';
 
 import { findGateway, getDeviceSupport, isGateway, probeDevice } from '../../src/setup/probe.js';
-import { createCloudDevice, createFakeRoute, lightFile, plugFile } from '../fakeTuya.js';
+import { createCloudDevice, createFakeRoute, leakFile, lightFile, motionModel, motionProductKey, plugFile } from '../fakeTuya.js';
 
 const plugDataPoints = { '1': true, '2': 0, '4': 53, '5': 123, '6': 2305 };
 
@@ -63,7 +63,7 @@ describe('probe', () => {
       return route;
     };
     expect(await probeDevice(plug, [failing(new TuyaError('SESSION_EXPIRED', 'sign in'))])).toMatchObject({ status: 'signInRequired' });
-    for (const code of ['CONNECTION_FAILED', 'CONNECTION_LOST', 'REQUEST_TIMED_OUT'] as const) {
+    for (const code of ['CONNECTION_FAILED', 'CONNECTION_LOST', 'REQUEST_TIMED_OUT', 'DEVICE_OFFLINE'] as const) {
       expect(await probeDevice(plug, [failing(new TuyaError(code, 'no answer'))])).toMatchObject({ status: 'unreachable' });
     }
     const failed = await probeDevice(plug, [failing(new Error('boom'))]);
@@ -78,5 +78,34 @@ describe('probe', () => {
     expect(light.message).toMatch(/^It is a kind of device the plugin does not control yet: /);
     const feeder = await probeDevice(createCloudDevice('advwin_6l_petfeeder.yaml'), [createFakeRoute({})]);
     expect(feeder).toMatchObject({ status: 'unsupported', message: 'It has no switch and no sensor the plugin shows in Matter' });
+  });
+
+  describe('a device the catalog does not list', () => {
+    const motion = createCloudDevice(leakFile, { productKey: motionProductKey, category: 'pir' });
+    const motionDataPoints = { '1': 'pir', '4': 100, '7': 252, '10': '60s' };
+
+    test("should name the controls of a motion sensor by the cloud's model, not by the leak sensor that reports the same data points", async () => {
+      const result = await probeDevice(motion, [createFakeRoute(motionDataPoints)], undefined, async () => Promise.resolve(motionModel));
+      expect(result).toMatchObject({ status: 'ready', model: motionModel, productName: 'Motion Sensor' });
+      expect(result.catalogFile).toBeUndefined();
+      expect(result.values).toEqual({ device: { motion: true, batteryInPercent: 100, temperatureInC: 25.2 } });
+      expect(result.features?.sensors.map((sensor) => sensor.kind)).toEqual(['temperature', 'occupancy']);
+    });
+
+    test('should match by the data points when there is no model, it cannot be read, or the plugin knows nothing of it', async () => {
+      const route = (): ReturnType<typeof createFakeRoute> => createFakeRoute(motionDataPoints);
+      expect((await probeDevice(motion, [route()])).catalogFile).toBe(leakFile);
+      const failed = await probeDevice(motion, [route()], undefined, async () => Promise.reject(new TuyaError('PERMISSION_DENIED', 'plan expired')));
+      expect(failed).toMatchObject({ status: 'ready', catalogFile: leakFile });
+      expect(failed.model).toBeUndefined();
+      expect((await probeDevice({ ...motion, category: 'dj' }, [route()], undefined, async () => Promise.resolve(motionModel))).catalogFile).toBe(leakFile);
+    });
+
+    test("should take the catalog's entry for the product without reading the model", async () => {
+      const readModel = vi.fn(async () => Promise.resolve(motionModel));
+      const result = await probeDevice(plug, [createFakeRoute(plugDataPoints)], undefined, readModel);
+      expect(result.catalogFile).toBe(plugFile);
+      expect(readModel).not.toHaveBeenCalled();
+    });
   });
 });

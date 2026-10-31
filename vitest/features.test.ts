@@ -4,10 +4,21 @@
  * @author Calvin Che
  */
 
-import type { TuyaDeviceEntry } from 'open-tuya';
+import { MODEL_CATEGORIES as modelCategories, type TuyaDeviceEntry } from 'open-tuya';
 
-import { findCatalogEntry, getDeviceFeatures, getEntrySupport, getProductName, labelControl, pickSupportedEntry, readValue } from '../src/features.js';
-import { entryOf, leakFile, lightFile, multiSensorFile, plugFile, stripFile } from './fakeTuya.js';
+import {
+  createModelEntry,
+  findCatalogEntry,
+  findDeviceEntry,
+  getDeviceFeatures,
+  getEntrySupport,
+  getProductName,
+  labelControl,
+  MODEL_CATEGORIES,
+  pickSupportedEntry,
+  readValue,
+} from '../src/features.js';
+import { entryOf, leakFile, lightFile, motionModel, multiSensorFile, plugFile, stripFile } from './fakeTuya.js';
 
 describe('labelControl', () => {
   test('should name the power of a device Power', () => {
@@ -112,7 +123,7 @@ describe('getEntrySupport', () => {
   });
 
   test('should pick the first entry the plugin supports', () => {
-    expect(pickSupportedEntry([entryOf(lightFile), entryOf(plugFile)])?.source.file).toBe(plugFile);
+    expect(pickSupportedEntry([entryOf(lightFile), entryOf(plugFile)])?.source?.file).toBe(plugFile);
     expect(pickSupportedEntry([entryOf(lightFile)])).toBeUndefined();
   });
 });
@@ -135,5 +146,38 @@ describe('catalog helpers', () => {
     expect(readValue(values, { component: 'device', control: 'on' })).toBe(true);
     expect(readValue(values, { component: 'device', control: 'off' })).toBeUndefined();
     expect(readValue(values, { component: 'light', control: 'on' })).toBeUndefined();
+  });
+});
+
+describe('device models', () => {
+  test('should build a motion sensor from its model, with its temperature and its battery', () => {
+    const entry = createModelEntry(motionModel, 'pir');
+    expect(entry?.name).toBe('Motion Sensor');
+    expect(entry === undefined ? undefined : getEntrySupport(entry)).toBe('supported');
+    const features = entry === undefined ? undefined : getDeviceFeatures(entry);
+    expect(features?.sensors.map((sensor) => [sensor.kind, sensor.control, sensor.unit])).toEqual([
+      ['temperature', 'temperatureInC', 'C'],
+      ['occupancy', 'motion', undefined],
+    ]);
+    expect(features?.battery).toEqual({ component: 'device', control: 'batteryInPercent' });
+  });
+
+  test('should build nothing for a category the plugin does not name by a model, or a model it knows nothing of', () => {
+    expect(createModelEntry(motionModel, 'dj')).toBeUndefined();
+    // A plug's model knows its switches but not its meter: the catalog names it.
+    expect(createModelEntry({ '1': { code: 'switch_1', type: 'boolean' } }, 'cz')).toBeUndefined();
+    expect(createModelEntry(motionModel, 'toString')).toBeUndefined();
+    expect(createModelEntry({ '1': { code: 'work_mode', type: 'enum' } }, 'pir')).toBeUndefined();
+  });
+
+  test('should name a product for each category open-tuya names by a model, and no other', () => {
+    expect(Object.keys(MODEL_CATEGORIES).toSorted()).toEqual([...modelCategories].toSorted());
+  });
+
+  test('should find the entry of a stored device from its catalog file or from its model', () => {
+    expect(findDeviceEntry({ catalogFile: plugFile })?.name).toBe('Energy monitoring smartplug');
+    expect(findDeviceEntry({ model: motionModel, category: 'pir' })?.name).toBe('Motion Sensor');
+    expect(findDeviceEntry({ model: motionModel })).toBeUndefined();
+    expect(findDeviceEntry({})).toBeUndefined();
   });
 });

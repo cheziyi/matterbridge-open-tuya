@@ -4,7 +4,7 @@
  * @author Calvin Che
  */
 
-import type { ControlValues, DataPoints, TuyaClient, TuyaCloudDevice, TuyaDeviceEntry } from 'open-tuya';
+import type { ControlValues, DataPoints, TuyaClient, TuyaCloudDevice, TuyaDeviceEntry, TuyaDeviceModel } from 'open-tuya';
 import type { Mock } from 'vitest';
 
 import type { DeviceClient, DeviceConnection } from '../src/accessory/tuyaAccessory.js';
@@ -21,6 +21,28 @@ export const multiSensorFile = 'fourin1_motion_sensor.yaml';
 export const leakFile = 'meian_sw02_leakdetector.yaml';
 /** A light, which the plugin does not control. */
 export const lightFile = 'arlec_10_pathlights.yaml';
+
+/** A motion sensor that also reads the temperature, whose product the catalog does not list, as the cloud's model describes it. */
+export const motionModel: TuyaDeviceModel = {
+  '1': { code: 'pir', type: 'enum', range: ['pir', 'none'] },
+  '4': { code: 'battery_percentage', type: 'integer', min: 0, max: 100, step: 1, scale: 0, unit: '%' },
+  '7': { code: 'temp_current', type: 'integer', min: -400, max: 2000, step: 1, scale: 1, unit: '℃' },
+  '10': { code: 'pir_time', type: 'enum', range: ['30s', '60s', '120s'] },
+};
+
+/** The product key of the motion sensor of `motionModel`, which no catalog entry lists. */
+export const motionProductKey = 'm0000000000model';
+
+/**
+ * Build a stored device named by the cloud's model of it, as `motionModel` describes the device
+ *
+ * @param {Partial<TuyaDeviceConfig>} overrides The fields to replace.
+ * @returns {TuyaDeviceConfig} The device.
+ */
+export function createModelDeviceConfig(overrides: Partial<TuyaDeviceConfig> = {}): TuyaDeviceConfig {
+  const { catalogFile: _catalogFile, ...device } = createDeviceConfig(leakFile, { productKey: motionProductKey, category: 'pir', model: motionModel });
+  return { ...device, ...overrides };
+}
 
 /**
  * Get a catalog entry the tests need

@@ -82,7 +82,7 @@ export function draftsFromDevices(devices: readonly ListedDevice[]): Draft[] {
       isNew: true,
       hiddenFeatures: [],
       addedFeatures: [],
-      isComposed: true,
+      isComposed: false,
     };
   });
 }
@@ -96,6 +96,7 @@ export function draftFromStored(device: StoredDevice): Draft {
     isCloudOnly: device.isCloudOnly ?? false,
     isNew: false,
     catalogFile: device.catalogFile,
+    model: device.model,
     productName: device.productName,
     features: device.features,
     values: device.values,

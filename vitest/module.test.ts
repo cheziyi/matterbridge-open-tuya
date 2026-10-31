@@ -16,11 +16,24 @@ import type { MatterbridgeEndpoint } from 'matterbridge';
 import { BridgedDeviceBasicInformation, OnOff } from 'matterbridge/matter/clusters';
 import { log, setupTest } from 'matterbridge/test-utils/vitest';
 import { addMatterbridge, createServerNode, createTestEnvironment, getMatterbridge, startServerNode, stopServerNode } from 'matterbridge/test-utils/vitest/matter';
-import { type AppCloudSession, type DataPoints, type DiscoveredTuyaDevice, type TuyaCloudDevice, TuyaError } from 'open-tuya';
+import { type AppCloudSession, type DataPoints, type DiscoveredTuyaDevice, type TuyaCloudDevice, type TuyaDeviceModel, TuyaError } from 'open-tuya';
 
 import type { TuyaDeviceConfig } from '../src/config.js';
 import initializePlugin, { deviceSyncIntervalInMs, smartLifeClientId, smartLifeSchema, TuyaPlatform, type TuyaPlatformConfig } from '../src/module.js';
-import { createCloudDevice, createDeviceConfig, createFakeRoute, type FakeRoute, lightFile, plugFile, productKeyOf, stripFile } from './fakeTuya.js';
+import {
+  createCloudDevice,
+  createDeviceConfig,
+  createFakeRoute,
+  createModelDeviceConfig,
+  type FakeRoute,
+  leakFile,
+  lightFile,
+  motionModel,
+  motionProductKey,
+  plugFile,
+  productKeyOf,
+  stripFile,
+} from './fakeTuya.js';
 
 // What the mocked SDK reaches: the devices on the LAN and in the cloud, which the test body sets up.
 const net = vi.hoisted(() => ({
@@ -37,6 +50,8 @@ const net = vi.hoisted(() => ({
   discoveryClose: undefined as unknown,
   /** What the cloud account lists. */
   listed: [] as TuyaCloudDevice[],
+  /** The cloud's model of each device, by its device ID: none describes a device not in it. */
+  models: new Map<string, TuyaDeviceModel>(),
   accounts: [] as Record<string, unknown>[],
   sessionChange: undefined as ((session: AppCloudSession) => void) | undefined,
   qr: undefined as unknown,
@@ -67,6 +82,7 @@ vi.mock('open-tuya', async (importOriginal) => {
       options,
       listDevices: vi.fn(async () => Promise.resolve(net.listed)),
       createClient: vi.fn(async (deviceId: string) => Promise.resolve(routeTo(deviceId, net.cloud))),
+      readDeviceModel: vi.fn(async (deviceId: string) => Promise.resolve(net.models.get(deviceId) ?? {})),
       close: vi.fn(async () => Promise.resolve()),
     };
     net.accounts.push(account);
@@ -114,6 +130,7 @@ const gatewayId = 'bf00000000000000gw01';
 const nodeDeviceId = 'a4c13800000000000001';
 const nodeId = 'a4c1380000000001';
 const lightId = 'bf0000000000000003aa';
+const motionId = 'bf0000000000000004aa';
 
 const desk = createDeviceConfig(plugFile, { deviceId: deskId, name: 'Desk', localKey: '0123456789abcdef' });
 const listedDesk = createCloudDevice(plugFile, { deviceId: deskId, name: 'Desk plug' });
@@ -346,6 +363,33 @@ describe('TuyaPlatform', () => {
     await expect(platform.saveDevice(createDeviceConfig(plugFile, { deviceId: benchId, name: 'Bench', catalogFile: 'nothing.yaml' }))).rejects.toThrow(
       'The device catalog has no entry from nothing.yaml',
     );
+  });
+
+  test("should check a sensor the catalog does not list by the cloud's model of it, and store and start it by that model", async () => {
+    const listedMotion = createCloudDevice(leakFile, { deviceId: motionId, name: 'Landing sensor', productKey: motionProductKey, category: 'pir' });
+    net.listed.push(listedMotion);
+    net.models.set(motionId, motionModel);
+    net.dataPoints.set(motionId, { '1': 'pir', '4': 100, '7': 252, '10': '60s' });
+    expect(await platform.probe(motionId)).toMatchObject({ status: 'ready', model: motionModel, productName: 'Motion Sensor' });
+    // The page sends the model and the category, and the category is taken from the list.
+    const fromPage = createModelDeviceConfig({ deviceId: motionId, name: 'Landing', category: 'hps' });
+    delete fromPage.localKey;
+    await platform.saveDevice(fromPage);
+    expect(storedDevice(motionId)).toMatchObject({ model: motionModel, category: 'pir', localKey: '0123456789abcdef' });
+    expect(storedDevice(motionId)?.catalogFile).toBeUndefined();
+    await vi.waitFor(() => expect(byLabel('Landing')?.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(true));
+    await vi.waitFor(async () =>
+      expect((await platform.getSetupState()).devices.find((device) => device.deviceId === motionId)).toMatchObject({
+        productName: 'Motion Sensor',
+        values: { device: { motion: true, batteryInPercent: 100, temperatureInC: 25.2 } },
+      }),
+    );
+    // A device the account does not list keeps no category from the page, and its model names nothing.
+    await expect(platform.saveDevice(createModelDeviceConfig({ deviceId: 'bf0000000000000077aa', name: 'Unlisted' }))).rejects.toThrow(
+      'No entry names the controls of the device from its model',
+    );
+    expect(await platform.removeDevice(motionId)).toBe(true);
+    net.listed.pop();
   });
 
   test('should rename a device in place, and build it again with new options at the next restart', async () => {
@@ -600,6 +644,7 @@ describe('TuyaPlatform', () => {
           createDeviceConfig(plugFile, { deviceId: 'bf0000000000000089aa', name: 'Odd', localKey: 'badkey', host: '10.0.0.9', version: '3.3' }),
           createDeviceConfig(plugFile, { deviceId: 'bf0000000000000090aa', name: 'Node', nodeId: 'refused', gatewayId: 'bf00000000000000gw09', localKey: 'nodekey000000001' }),
           createDeviceConfig(plugFile, { deviceId: 'bf0000000000000091aa', name: 'Far', nodeId: 'a4c1380000000091', gatewayId: 'bf00000000000000gw08', localKey: 'badkey' }),
+          createModelDeviceConfig({ deviceId: 'bf0000000000000092aa', name: 'Lamp', category: 'dj' }),
         ],
       }),
     );
@@ -612,6 +657,7 @@ describe('TuyaPlatform', () => {
     const state = await odd.getSetupState();
     expect(state.devices[0]).toMatchObject({ status: 'stopped', error: expect.stringContaining('has no entry from removed_plug.yaml'), features: undefined });
     expect(log.warn).toHaveBeenCalledWith('bf0000000000000089aa cannot be reached on the LAN: The local key is not 16 bytes');
+    expect(state.devices[4]).toMatchObject({ status: 'stopped', error: 'No entry names the controls of its model in the category dj: set the device up again in the setup page' });
     expect(await odd.removeDevice('bf0000000000000088aa')).toBe(true);
     await odd.onShutdown();
     // The test aggregator unregisters every device of every platform at once: only those of this one go.

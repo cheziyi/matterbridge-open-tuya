@@ -57,7 +57,7 @@ import {
   withoutLocalKey,
 } from './config.js';
 import { describeError, getErrorMessage, ignoreFailure, isSignInRequired } from './errors.js';
-import { findCatalogEntry, getDeviceFeatures, getProductName } from './features.js';
+import { findDeviceEntry, getDeviceFeatures, getProductName } from './features.js';
 import { AddressStore, type LanAddress } from './platform/addressStore.js';
 import { CloudRoute } from './platform/cloudRoute.js';
 import { EndpointIds, EndpointIdStore } from './platform/endpointIds.js';
@@ -285,7 +285,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       if (status?.isReachable === true) state = 'online';
       else if (status?.isConnecting === true) state = 'connecting';
       else if (status !== undefined) state = 'offline';
-      const entry = findCatalogEntry(device.catalogFile);
+      const entry = findDeviceEntry(device);
       return {
         ...withoutLocalKey(device),
         status: state,
@@ -453,7 +453,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   }
 
   /**
-   * Check whether a device of the account answers, on the LAN first and through the cloud, and find its catalog entry
+   * Check whether a device of the account answers, on the LAN first and through the cloud, and find the entry its controls are named by
    *
    * @param {string} deviceId The device to check.
    * @returns {Promise<ProbeResult>} `ready` with the entry, the features and the controls, or the failure that stands in the way.
@@ -475,7 +475,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     const gateway = findGateway(device, [...this.listed.values()]);
     const lan = stored?.isCloudOnly === true ? undefined : this.createLanRoute({ ...device, gatewayId: gateway?.deviceId, host: stored?.host, version: stored?.version });
     const routes: TuyaClient[] = [...(lan === undefined ? [] : [lan]), new CloudRoute(async () => cloud.createClient(deviceId))];
-    const result = await probeDevice(device, routes, lan);
+    const result = await probeDevice(device, routes, lan, async () => cloud.readDeviceModel(deviceId));
     if (result.status === 'signInRequired') this.rejectAccount();
     return result;
   }
@@ -488,12 +488,11 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    *
    * @param {TuyaDeviceConfig} device The device, as the setup page sends it.
    * @returns {Promise<void>} Resolves when the device is stored and started or updated, or noted for the next start of Matterbridge.
-   * @throws {Error} When another stored device already has the name, or the catalog has no entry from its file.
+   * @throws {Error} When another stored device already has the name, or no entry names its controls.
    */
   async saveDevice(device: TuyaDeviceConfig): Promise<void> {
     const stored = this.devices.find((candidate) => candidate.deviceId === device.deviceId);
     if (this.devices.some((candidate) => candidate !== stored && candidate.name === device.name)) throw new Error(`Another device is already named "${device.name}"`);
-    if (findCatalogEntry(device.catalogFile) === undefined) throw new Error(`The device catalog has no entry from ${device.catalogFile}`);
     const listed = this.listed.get(device.deviceId);
     // What the cloud lists is never taken from the page: from the last list, or as it was stored.
     const { cloudName: _cloudName, category: _category, nodeId: _nodeId, gatewayId: _gatewayId, localKey: _localKey, ...options } = device;
@@ -509,6 +508,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
         next.gatewayId = source.gatewayId;
       }
     }
+    if (findDeviceEntry(next) === undefined)
+      throw new Error(next.catalogFile === undefined ? 'No entry names the controls of the device from its model' : `The device catalog has no entry from ${next.catalogFile}`);
     const devices = stored === undefined ? [...this.devices, next] : this.devices.map((candidate) => (candidate === stored ? next : candidate));
     await this.applyDevices(devices);
   }
@@ -885,9 +886,13 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * @returns {Promise<void>} Resolves when the device runs, or could not be started.
    */
   private async startDevice(device: TuyaDeviceConfig): Promise<void> {
-    const entry = findCatalogEntry(device.catalogFile);
+    const entry = findDeviceEntry(device);
     if (entry === undefined) {
-      this.startErrors.set(device.deviceId, `The device catalog of this version has no entry from ${device.catalogFile}: set the device up again in the setup page`);
+      const cause =
+        device.catalogFile === undefined
+          ? `no entry names the controls of its model in the category ${String(device.category)}`
+          : `the device catalog of this version has no entry from ${device.catalogFile}`;
+      this.startErrors.set(device.deviceId, `${cause.charAt(0).toUpperCase()}${cause.slice(1)}: set the device up again in the setup page`);
       return;
     }
     const registered: MatterbridgeEndpoint[] = [];

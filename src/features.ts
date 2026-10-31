@@ -21,7 +21,7 @@
  * limitations under the License.
  */
 
-import { CATALOG, type ControlValue, type ControlValues, type Measure, type TuyaControl, type TuyaDeviceEntry } from 'open-tuya';
+import { CATALOG, type ControlValue, type ControlValues, createDeviceEntry, type Measure, type TuyaControl, type TuyaDeviceEntry, type TuyaDeviceModel } from 'open-tuya';
 
 /**
  * The components a device in reach of this plugin is made of: the device itself, and the lights of its buttons or its
@@ -267,7 +267,44 @@ export function getDeviceFeatures(entry: TuyaDeviceEntry): DeviceFeatures {
  * @returns {TuyaDeviceEntry | undefined} The entry, or undefined when the catalog of this version has none from that file.
  */
 export function findCatalogEntry(file: string): TuyaDeviceEntry | undefined {
-  return CATALOG.find((entry) => entry.source.file === file);
+  return CATALOG.find((entry) => entry.source?.file === file);
+}
+
+/**
+ * The Tuya categories whose devices the plugin names by the cloud's model of the device, when the catalog does not
+ * list their product, and the product name each is shown with: the sensors open-tuya's `MODEL_CATEGORIES` lists. The
+ * model reads what a sensor is for, but not a plug's meter nor a heater's set point: a device of another category is
+ * left to the catalog entry that names most of its data points.
+ */
+export const MODEL_CATEGORIES: Readonly<Record<string, string>> = {
+  hps: 'Presence Sensor',
+  mcs: 'Contact Sensor',
+  pir: 'Motion Sensor',
+  sj: 'Water Leak Sensor',
+  wsdcg: 'Temperature and Humidity Sensor',
+};
+
+/**
+ * Build the entry of a device from the cloud's model of it
+ *
+ * @param {TuyaDeviceModel} model The model.
+ * @param {string | undefined} category The category the cloud lists the device in, such as `pir`.
+ * @returns {TuyaDeviceEntry | undefined} The entry, or undefined for a category outside `MODEL_CATEGORIES`, or a model none of whose data points it knows.
+ */
+export function createModelEntry(model: TuyaDeviceModel, category: string | undefined): TuyaDeviceEntry | undefined {
+  if (category === undefined || !Object.hasOwn(MODEL_CATEGORIES, category)) return undefined;
+  return createDeviceEntry(model, { category, name: MODEL_CATEGORIES[category] });
+}
+
+/**
+ * Find the entry the controls of a stored device are named by
+ *
+ * @param {{ catalogFile?: string; model?: TuyaDeviceModel; category?: string }} device The device.
+ * @returns {TuyaDeviceEntry | undefined} The catalog entry from its file, or the entry built from its model, or undefined when this version has neither.
+ */
+export function findDeviceEntry(device: { catalogFile?: string; model?: TuyaDeviceModel; category?: string }): TuyaDeviceEntry | undefined {
+  if (device.catalogFile !== undefined) return findCatalogEntry(device.catalogFile);
+  return device.model === undefined ? undefined : createModelEntry(device.model, device.category);
 }
 
 /**

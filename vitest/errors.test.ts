@@ -32,6 +32,9 @@ describe('errors', () => {
 
   test('should describe a code in words the setup page can show, and keep the message', () => {
     expect(describeError(new TuyaError('QR_CODE_EXPIRED', 'expired'))).toBe('The QR code expired: ask for a new one (expired)');
+    expect(describeError(new TuyaError('DEVICE_OFFLINE', 'The cloud lists device bf as offline'))).toBe(
+      'The Tuya cloud says the device is offline: check that it is plugged in and online in the Smart Life app (The cloud lists device bf as offline)',
+    );
     expect(describeError(new TuyaError('MALFORMED_FRAME', 'garbage'))).toBe('garbage');
     expect(describeError(new Error('boom'))).toBe('boom');
   });
