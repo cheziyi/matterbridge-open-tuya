@@ -125,7 +125,19 @@ describe('TuyaAccessory', () => {
       expect(accessory.endpoint.deviceName).toBe('Tuya bf0000000000000001aa');
       expect(accessory.endpoint.serialNumber).toBe('bf0000000000000001aa');
       expect(labelOf(accessory.endpoint)).toBe('Desk');
-      expect(accessory.deviceConfig).toBe(config);
+      // The product name is shown, and kept out of the unique id, which a new release of the catalog must not change.
+      expect(accessory.endpoint.productName).toBe('TopGreener TGWF115PRM');
+      const renamed = new TuyaAccessory({
+        config,
+        entry: entryOf(plugFile),
+        features: getDeviceFeatures(entryOf(plugFile)),
+        productName: 'Another name for the product, cut to 32',
+        createConnection: (): DeviceConnection => connectionOf(client),
+        log,
+        vendorId,
+      });
+      expect(renamed.endpoint.uniqueId).toBe(accessory.endpoint.uniqueId);
+      expect(renamed.endpoint.getClusterServerOptions(BridgedDeviceBasicInformation)?.productName).toBe('Another name for the product, cu');
       expect(accessory.getStatus()).toEqual({
         isReachable: false,
         isConnecting: true,
@@ -151,6 +163,10 @@ describe('TuyaAccessory', () => {
       expect(endpoint.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(true);
       expect(accessory.getStatus()).toMatchObject({ isReachable: true, isConnecting: false, route: 'lan', hasLan: true });
       expect(log.info).toHaveBeenCalledWith('"Desk" answers on the LAN');
+      // The setup page checks a running device through its own client.
+      expect(accessory.isOnLan()).toBe(true);
+      expect(await accessory.readDataPoints()).toEqual({ '1': true });
+      expect(client.readDataPoints).toHaveBeenCalledTimes(1);
     });
 
     test('should send the on/off a controller writes to the device', async () => {
@@ -213,8 +229,8 @@ describe('TuyaAccessory', () => {
       expect(accessory.name).toBe('Lamp');
       expect(log.info).toHaveBeenCalledWith('"Desk" is now named "Lamp"');
       expect(accessory.endpoint.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Lamp');
-      // The exposure stays as the device was built.
-      expect(accessory.deviceConfig.isComposed).toBe(true);
+      // The endpoints stay as the device was built.
+      expect(accessory.endpoints).toHaveLength(1);
       vi.mocked(log.info).mockClear();
       await accessory.updateConfig(createDeviceConfig(plugFile, { name: 'Lamp' }));
       expect(log.info).not.toHaveBeenCalledWith(expect.stringContaining('is now named'));
@@ -238,6 +254,8 @@ describe('TuyaAccessory', () => {
       expect(await accessory.updateConnection((): undefined => undefined)).toBe(false);
       expect(accessory.endpoint.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(false);
       expect(accessory.getStatus()).toMatchObject({ hasLan: false, lastError: noRouteMessage });
+      expect(accessory.isOnLan()).toBe(false);
+      await expect(accessory.readDataPoints()).rejects.toThrow(noRouteMessage);
       await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
       await settle(accessory);
       expect(log.error).toHaveBeenCalledWith(`"Lamp" did not take power off: ${noRouteMessage}`);
@@ -363,6 +381,9 @@ describe('TuyaAccessory', () => {
     });
 
     test('should read the temperature in the unit of the catalog without a unit reported, and the battery levels', async () => {
+      // A push of the temperature alone is read in the unit the device last reported, not in the unit of the catalog.
+      client.push({ device: { temperature: 72 } });
+      await vi.waitFor(() => expect(accessory.endpoint.getAttribute(TemperatureMeasurement, 'measuredValue')).toBe(2222));
       client.push({ device: { temperature: 21.5, temperatureUnit: 7, batteryInPercent: 5, humidityInPercent: 'wet', illuminanceInLux: 'dark' } });
       await settle(accessory);
       client.values = { device: { temperature: 21.5, batteryInPercent: 80 } };

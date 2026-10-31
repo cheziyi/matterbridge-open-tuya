@@ -27,17 +27,11 @@ import type { DeviceRoute } from '../accessory/tuyaAccessory.js';
 import { describeError, getErrorCode } from '../errors.js';
 import { createModelEntry, type DeviceFeatures, getDeviceFeatures, getEntrySupport, getProductName, pickSupportedEntry } from '../features.js';
 
-/** Whether the plugin can control a device of the account, or why not. */
-export const DEVICE_SUPPORTS = ['supported', 'unknownProduct', 'otherKind', 'gateway'] as const;
-
-/** Whether the plugin can control a device of the account, or why not: one of `DEVICE_SUPPORTS`. `unknownProduct` is checked by its data points in the Connect step. */
-export type DeviceSupport = (typeof DEVICE_SUPPORTS)[number];
+/** Whether the plugin can control a device of the account, or why not. `unknownProduct` is checked by its data points in the Connect step. */
+export type DeviceSupport = 'supported' | 'unknownProduct' | 'otherKind' | 'gateway';
 
 /** What a check of a device found. */
-export const PROBE_STATUSES = ['ready', 'signInRequired', 'unsupported', 'unreachable', 'failed'] as const;
-
-/** What a check of a device found: one of `PROBE_STATUSES`. */
-export type ProbeStatus = (typeof PROBE_STATUSES)[number];
+export type ProbeStatus = 'ready' | 'signInRequired' | 'unsupported' | 'unreachable' | 'failed';
 
 /** What a check of a device found, with what it read from the device when it answered. */
 export interface ProbeResult {
@@ -119,10 +113,7 @@ function classifyFailure(error: unknown, deviceId: string): ProbeResult {
 }
 
 /**
- * Read a device through its routes, and find the entry to name its controls by
- *
- * Every route is tried in order, connected or not, so that a route on the LAN listed first answers once it connects.
- * The routes are closed afterwards: the gateway's client and the account they go through stay open.
+ * Read a device, and find the entry to name its controls by
  *
  * The catalog's entry for the product comes first, then the entry built from the cloud's model of the device, then the
  * catalog's entry that names the largest share of the data points the device reports. Two entries that name the same
@@ -132,59 +123,86 @@ function classifyFailure(error: unknown, deviceId: string): ProbeResult {
  *  - the model cannot be read -> the match by data points, as without one
  *
  * @param {TuyaCloudDevice} device The device, as the cloud lists it.
+ * @param {() => Promise<DataPoints>} read Reads the data points of the device, such as through the client of a running device.
+ * @param {() => boolean} isOnLan Tells, once it answered, whether it answered on the LAN.
+ * @param {() => Promise<TuyaDeviceModel>} [readModel] Reads the cloud's model of the device, for a product the catalog does not list.
+ * @returns {Promise<ProbeResult>} `ready` with the entry, the features and the controls, or what stands in the way.
+ */
+export async function probeThrough(
+  device: TuyaCloudDevice,
+  read: () => Promise<DataPoints>,
+  isOnLan: () => boolean,
+  readModel?: () => Promise<TuyaDeviceModel>,
+): Promise<ProbeResult> {
+  const { deviceId } = device;
+  let dataPoints: DataPoints;
+  try {
+    dataPoints = await read();
+  } catch (error) {
+    return classifyFailure(error, deviceId);
+  }
+  const entries = findDeviceEntries({ productKey: device.productKey, dataPoints });
+  const fromProduct = pickSupportedEntry(entries.filter((candidate) => candidate.products.some((product) => product.productKey === device.productKey)));
+  let model: TuyaDeviceModel | undefined;
+  let fromModel: TuyaDeviceEntry | undefined;
+  if (fromProduct === undefined && readModel !== undefined) {
+    try {
+      model = await readModel();
+    } catch {
+      // The match by data points follows, as for a device without a model.
+    }
+    const built = model === undefined ? undefined : createModelEntry(model, device.category);
+    if (built !== undefined && getEntrySupport(built) === 'supported') fromModel = built;
+  }
+  const entry = fromProduct ?? fromModel ?? pickSupportedEntry(entries);
+  if (entry === undefined) {
+    const [best] = entries;
+    let message = 'The device catalog of open-tuya does not know this device yet';
+    if (best !== undefined)
+      message =
+        getEntrySupport(best) === 'noControls'
+          ? 'It has no switch and no sensor the plugin shows in Matter'
+          : `It is a kind of device the plugin does not control yet: ${best.name}`;
+    return { status: 'unsupported', deviceId, message };
+  }
+  return {
+    status: 'ready',
+    deviceId,
+    ...(entry === fromModel ? { model } : { catalogFile: entry.source?.file }),
+    productName: getProductName(entry, device.productKey),
+    features: getDeviceFeatures(entry),
+    values: readControls(entry, dataPoints),
+    route: isOnLan() ? 'lan' : 'cloud',
+  };
+}
+
+/**
+ * Read a device through its routes, and find the entry to name its controls by
+ *
+ * Every route is tried in order, connected or not, so that a route on the LAN listed first answers once it connects.
+ * The routes are closed afterwards: the gateway's client and the account they go through stay open.
+ *
+ * @param {TuyaCloudDevice} device The device, as the cloud lists it.
  * @param {readonly TuyaClient[]} routes The routes to read it through, the LAN first: at least one.
  * @param {TuyaClient} [lan] The route on the LAN among them, to tell whether it answered.
  * @param {() => Promise<TuyaDeviceModel>} [readModel] Reads the cloud's model of the device, for a product the catalog does not list.
  * @returns {Promise<ProbeResult>} `ready` with the entry, the features and the controls, or what stands in the way.
  */
 export async function probeDevice(device: TuyaCloudDevice, routes: readonly TuyaClient[], lan?: TuyaClient, readModel?: () => Promise<TuyaDeviceModel>): Promise<ProbeResult> {
-  const { deviceId } = device;
-  try {
-    let dataPoints: DataPoints | undefined;
+  // Each route in turn, as createTuyaClient reads a device to find its entry: a route on the LAN still connecting answers once it is.
+  const read = async (): Promise<DataPoints> => {
     let lastError: unknown;
-    // Each route in turn, as createTuyaClient reads a device to find its entry: a route on the LAN still connecting answers once it is.
     for (const route of routes) {
       try {
-        dataPoints = await route.readDataPoints();
-        break;
+        return await route.readDataPoints();
       } catch (error) {
         lastError = error;
       }
     }
-    if (dataPoints === undefined) return classifyFailure(lastError, deviceId);
-    const entries = findDeviceEntries({ productKey: device.productKey, dataPoints });
-    const fromProduct = pickSupportedEntry(entries.filter((candidate) => candidate.products.some((product) => product.productKey === device.productKey)));
-    let model: TuyaDeviceModel | undefined;
-    let fromModel: TuyaDeviceEntry | undefined;
-    if (fromProduct === undefined && readModel !== undefined) {
-      try {
-        model = await readModel();
-      } catch {
-        // The match by data points follows, as for a device without a model.
-      }
-      const built = model === undefined ? undefined : createModelEntry(model, device.category);
-      if (built !== undefined && getEntrySupport(built) === 'supported') fromModel = built;
-    }
-    const entry = fromProduct ?? fromModel ?? pickSupportedEntry(entries);
-    if (entry === undefined) {
-      const [best] = entries;
-      let message = 'The device catalog of open-tuya does not know this device yet';
-      if (best !== undefined)
-        message =
-          getEntrySupport(best) === 'noControls'
-            ? 'It has no switch and no sensor the plugin shows in Matter'
-            : `It is a kind of device the plugin does not control yet: ${best.name}`;
-      return { status: 'unsupported', deviceId, message };
-    }
-    return {
-      status: 'ready',
-      deviceId,
-      ...(entry === fromModel ? { model } : { catalogFile: entry.source?.file }),
-      productName: getProductName(entry, device.productKey),
-      features: getDeviceFeatures(entry),
-      values: readControls(entry, dataPoints),
-      route: lan?.connected === true ? 'lan' : 'cloud',
-    };
+    throw lastError;
+  };
+  try {
+    return await probeThrough(device, read, () => lan?.connected === true, readModel);
   } finally {
     await Promise.allSettled(routes.map(async (route) => route.close()));
   }

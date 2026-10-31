@@ -62,7 +62,7 @@ import { AddressStore, type LanAddress } from './platform/addressStore.js';
 import { CloudRoute } from './platform/cloudRoute.js';
 import { EndpointIds, EndpointIdStore } from './platform/endpointIds.js';
 import { parseSetupRevision, SetupRevisions } from './platform/setupRevisions.js';
-import { findGateway, getDeviceSupport, probeDevice, type ProbeResult } from './setup/probe.js';
+import { findGateway, getDeviceSupport, probeDevice, type ProbeResult, probeThrough } from './setup/probe.js';
 import {
   type DeveloperSignInRequest,
   type FoundDevice,
@@ -139,8 +139,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private discoveryError: string | undefined;
   /** Where each device was last heard on the LAN, or stored as heard at before the restart, by its device ID. */
   private readonly addresses = new Map<string, LanAddress>();
-  /** The client of each gateway the devices behind it are reached through, by its device ID. */
-  private readonly gateways = new Map<string, LocalTuyaClient>();
+  /** The client of each gateway the devices behind it are reached through, with the local key it was built with, by its device ID. */
+  private readonly gateways = new Map<string, { client: LocalTuyaClient; localKey: string }>();
   /** The devices of the account as the cloud last listed them, by their device ID, with their local keys: the setup page never sees those. */
   private listed = new Map<string, TuyaCloudDevice>();
   private deviceList: Promise<TuyaCloudDevice[]> | undefined;
@@ -263,12 +263,12 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    *
    * @param {string} method The HTTP method.
    * @param {string} [path] The path after `api/`.
-   * @param {Record<string, unknown>} [query] The query string parameters.
+   * @param {Record<string, unknown>} [_query] The query string parameters, which no request of the page uses.
    * @param {unknown} [body] The parsed JSON body.
    * @returns {Promise<unknown>} The JSON reply, or undefined for a path the plugin does not serve.
    */
-  override async onFetch(method: string, path?: string, query?: Record<string, unknown>, body?: unknown): Promise<unknown> {
-    return handleSetupRequest(this, method, path, query, body);
+  override async onFetch(method: string, path?: string, _query?: Record<string, unknown>, body?: unknown): Promise<unknown> {
+    return handleSetupRequest(this, method, path, body);
   }
 
   /**
@@ -355,7 +355,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Sign in to a cloud project of the Tuya developer platform, store it and connect every stored device through it
    *
-   * The project is checked by listing its devices before it is stored.
+   * The project is checked by listing its devices before it is stored. The account that listed them is kept, with its
+   * list: the cloud is not asked for them again.
    *
    * @param {DeveloperSignInRequest} request The access ID, the access secret and the data center of the project.
    * @returns {Promise<void>} Resolves when the account is stored and the devices are connected through it.
@@ -364,16 +365,16 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   async signInDeveloper(request: DeveloperSignInRequest): Promise<void> {
     const account: TuyaAccountConfig = { type: 'developer', ...request };
     const cloud = this.createCloud(account);
+    let devices: TuyaCloudDevice[];
     try {
-      await cloud.listDevices();
+      devices = await cloud.listDevices();
     } catch (error) {
       await cloud.close().catch(ignoreFailure);
       const message = `The Tuya developer platform did not list the devices of the project: ${describeError(error)}`;
       this.log.warn(message);
       throw new Error(message, { cause: error });
     }
-    await cloud.close().catch(ignoreFailure);
-    await this.setAccount(account);
+    await this.setAccount(account, cloud, devices);
     this.log.notice(`Signed in to the Tuya developer platform with the project ${request.accessId}`);
   }
 
@@ -455,6 +456,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Check whether a device of the account answers, on the LAN first and through the cloud, and find the entry its controls are named by
    *
+   * A running device is read through its own client: a second client on the LAN would take the one connection the
+   * device holds, and the running one would lose it.
+   *
    * @param {string} deviceId The device to check.
    * @returns {Promise<ProbeResult>} `ready` with the entry, the features and the controls, or the failure that stands in the way.
    */
@@ -471,11 +475,22 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     }
     const device = this.listed.get(deviceId);
     if (device === undefined) return { status: 'failed', deviceId, message: 'The Tuya account no longer lists the device: read the device list again' };
-    const stored = this.devices.find((candidate) => candidate.deviceId === deviceId);
-    const gateway = findGateway(device, [...this.listed.values()]);
-    const lan = stored?.isCloudOnly === true ? undefined : this.createLanRoute({ ...device, gatewayId: gateway?.deviceId, host: stored?.host, version: stored?.version });
-    const routes: TuyaClient[] = [...(lan === undefined ? [] : [lan]), new CloudRoute(async () => cloud.createClient(deviceId))];
-    const result = await probeDevice(device, routes, lan, async () => cloud.readDeviceModel(deviceId));
+    const running = this.accessories.get(deviceId);
+    let result: ProbeResult;
+    if (running === undefined) {
+      const stored = this.devices.find((candidate) => candidate.deviceId === deviceId);
+      const gateway = findGateway(device, [...this.listed.values()]);
+      const lan = stored?.isCloudOnly === true ? undefined : this.createLanRoute({ ...device, gatewayId: gateway?.deviceId, host: stored?.host, version: stored?.version });
+      const routes: TuyaClient[] = [...(lan === undefined ? [] : [lan]), new CloudRoute(async () => cloud.createClient(deviceId))];
+      result = await probeDevice(device, routes, lan, async () => cloud.readDeviceModel(deviceId));
+    } else {
+      result = await probeThrough(
+        device,
+        async () => running.readDataPoints(),
+        () => running.isOnLan(),
+        async () => cloud.readDeviceModel(deviceId),
+      );
+    }
     if (result.status === 'signInRequired') this.rejectAccount();
     return result;
   }
@@ -484,7 +499,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * Store a device, adding it or replacing the stored device of the same device ID
    *
    * What the cloud lists of the device, its local key among it, is taken from the last list: the setup page never sees
-   * the local key.
+   * the local key. What the list leaves out, such as a local key the cloud withholds, stays as it was stored.
    *
    * @param {TuyaDeviceConfig} device The device, as the setup page sends it.
    * @returns {Promise<void>} Resolves when the device is stored and started or updated, or noted for the next start of Matterbridge.
@@ -496,7 +511,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     const listed = this.listed.get(device.deviceId);
     // What the cloud lists is never taken from the page: from the last list, or as it was stored.
     const { cloudName: _cloudName, category: _category, nodeId: _nodeId, gatewayId: _gatewayId, localKey: _localKey, ...options } = device;
-    const source = listed === undefined ? stored : this.fromListing(listed);
+    const source = listed === undefined ? stored : { ...stored, ...this.fromListing(listed) };
     const next: TuyaDeviceConfig = { ...options };
     if (source !== undefined) {
       next.productKey = source.productKey;
@@ -649,19 +664,22 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * Store a new account, and connect every stored device through it
    *
    * @param {TuyaAccountConfig} account The account.
+   * @param {TuyaCloudAccount} [cloud] The account signed in already, such as the one that listed its devices to check it. Defaults to a new one.
+   * @param {readonly TuyaCloudDevice[]} [listing] The devices that account listed already, applied in place of a new read of the list.
    * @returns {Promise<void>} Resolves when the account is stored and the devices are connected through it.
    */
-  private async setAccount(account: TuyaAccountConfig): Promise<void> {
+  private async setAccount(account: TuyaAccountConfig, cloud = this.createCloud(account), listing?: readonly TuyaCloudDevice[]): Promise<void> {
     await this.enqueueChange(async () => {
       await this.cloud?.close().catch(ignoreFailure);
       this.account = account;
-      this.cloud = this.createCloud(account);
+      this.cloud = cloud;
       this.isAccountRejected = false;
-      this.listed = new Map();
+      this.listed = new Map(listing?.map((device) => [device.deviceId, device]));
       this.storeConfig();
       await this.reconnectAll();
     });
-    void this.syncDevices();
+    // The stored local keys may be out of date: the list in hand, or a new read of it, brings them up to date without holding the sign in.
+    void (listing === undefined ? this.syncDevices() : this.applyListing(listing).catch(ignoreFailure));
   }
 
   // Runs inside the queue of changes.
@@ -749,7 +767,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Get the client of the gateway a device is behind, creating it once the gateway was heard on the LAN
    *
-   * One client serves every device behind the gateway, which shares its local key.
+   * One client serves every device behind the gateway, which shares its local key. A gateway paired again in the app
+   * has a new local key: its client is built again with it, and the one built with the old key, which reaches nothing
+   * any more, is closed.
    *
    * @param {string} gatewayId The device ID of the gateway.
    * @param {string} localKey The local key of the gateway, which the devices behind it have.
@@ -757,13 +777,15 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    */
   private getGateway(gatewayId: string, localKey: string): LocalTuyaClient | undefined {
     const known = this.gateways.get(gatewayId);
-    if (known !== undefined) return known;
+    if (known?.localKey === localKey) return known.client;
     const address = this.addresses.get(gatewayId);
     if (address === undefined) return undefined;
     try {
-      const gateway = createLocalTuyaClient({ deviceId: gatewayId, host: address.host, version: address.version, localKey, ...(this.discovery && { discovery: this.discovery }) });
-      this.gateways.set(gatewayId, gateway);
-      return gateway;
+      const client = createLocalTuyaClient({ deviceId: gatewayId, host: address.host, version: address.version, localKey, ...(this.discovery && { discovery: this.discovery }) });
+      // The client is needed now: the one with the old key is closed in the background.
+      if (known !== undefined) void known.client.close().catch(ignoreFailure);
+      this.gateways.set(gatewayId, { client, localKey });
+      return client;
     } catch (error) {
       this.log.warn(`The gateway ${gatewayId} cannot be reached on the LAN: ${getErrorMessage(error)}`);
       return undefined;
@@ -774,7 +796,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     for (const [gatewayId, gateway] of this.gateways) {
       if (!isUnused(gatewayId)) continue;
       this.gateways.delete(gatewayId);
-      await gateway.close().catch(ignoreFailure);
+      await gateway.client.close().catch(ignoreFailure);
     }
   }
 
@@ -822,7 +844,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       const { cloud } = this;
       if (cloud !== undefined) routes.push(new CloudRoute(async () => cloud.createClient(device.deviceId)));
       if (routes.length === 0) return undefined;
-      return { client: new RoutedTuyaClient(routes, [entry]), hasLan: lan !== undefined, hasCloud: cloud !== undefined, isOnLan: () => lan?.connected === true };
+      return { client: new RoutedTuyaClient(routes, [entry]), hasLan: lan !== undefined, isOnLan: () => lan?.connected === true };
     };
   }
 

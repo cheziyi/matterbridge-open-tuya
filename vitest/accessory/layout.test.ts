@@ -4,7 +4,7 @@
  * @author Calvin Che
  */
 
-import { getAccessoryLayout, listUnits } from '../../src/accessory/layout.js';
+import { getAccessoryLayout } from '../../src/accessory/layout.js';
 import { defaultExposure } from '../../src/config.js';
 import { getDeviceFeatures } from '../../src/features.js';
 import { entryOf, multiSensorFile, plugFile, stripFile } from '../fakeTuya.js';
@@ -32,7 +32,7 @@ describe('getAccessoryLayout', () => {
       ['device.outlet5', '5'],
       ['device.childLock', '6'],
     ]);
-    expect(layout === undefined ? [] : listUnits(layout)).toHaveLength(5);
+    expect(layout === undefined ? [] : [layout.main, ...layout.sides]).toHaveLength(5);
     expect(getAccessoryLayout({ ...defaultExposure, hiddenFeatures: ['meter'] }, getDeviceFeatures(entryOf(plugFile)))?.meter).toBeUndefined();
   });
 

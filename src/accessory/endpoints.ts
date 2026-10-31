@@ -56,7 +56,7 @@ export interface EndpointIdentity {
   label: string;
   /** The device ID, which neither a new name nor a new address changes. */
   serial: string;
-  /** The name the product is sold under, such as `TopGreener TGWF115PRM`: Matterbridge makes the unique id of the device from it, with the name, the serial number and the vendor name. */
+  /** The name the product is sold under, such as `TopGreener TGWF115PRM`, as the catalog gives it: shown as the product name, and kept out of the unique id, which the catalog must not change. */
   productName: string;
   /** The vendor id of the bridge, used for the bridged device information. */
   vendorId: number;
@@ -66,6 +66,9 @@ export interface EndpointIdentity {
 
 /** What each endpoint beside the main one is, such as `Outlet 2`, for the endpoints that are devices of their own in Matter. */
 const labels = new WeakMap<MatterbridgeEndpoint, string>();
+
+/** The product name every endpoint is made with, which the unique id is made from: see `createBasicInformation`. */
+const stableProductName = `${vendorName} device`;
 
 /** The device type of each sensor kind. */
 const sensorDeviceTypes: Readonly<Record<SensorKind, DeviceTypeDefinition>> = {
@@ -113,6 +116,30 @@ export function getDeviceLabel(endpoint: MatterbridgeEndpoint, name: string): st
  */
 export async function applyDeviceLabel(endpoints: readonly MatterbridgeEndpoint[], name: string): Promise<void> {
   for (const endpoint of endpoints) await endpoint.updateAttribute(BridgedDeviceBasicInformation, 'nodeLabel', getDeviceLabel(endpoint, name));
+}
+
+/**
+ * Create the bridged device basic information of an endpoint, with the product name it shows
+ *
+ * Matterbridge makes the unique id of a bridged device, which the Matter apps use to tell a device they know from a new
+ * one, from its name, its serial number, its vendor name and its product name. The product name the catalog gives can
+ * change with a release of the catalog, or with another entry chosen for the device: the unique id is made with one
+ * that never changes, and the product name shown is written afterwards.
+ *
+ * @param {MatterbridgeEndpoint} endpoint The endpoint, with no bridged device basic information yet.
+ * @param {string} name The name of the endpoint in Matterbridge, which never changes.
+ * @param {string} serial The serial number of the endpoint, which never changes.
+ * @param {number} vendorId The vendor id of the bridge.
+ * @param {string} productName The product name to show, cut to the 32 characters Matter takes.
+ * @returns {MatterbridgeEndpoint} The endpoint.
+ */
+function createBasicInformation(endpoint: MatterbridgeEndpoint, name: string, serial: string, vendorId: number, productName: string): MatterbridgeEndpoint {
+  endpoint.createDefaultBridgedDeviceBasicInformationClusterServer(name, serial, vendorId, vendorName, stableProductName);
+  const shown = productName.slice(0, maxProductNameLength);
+  endpoint.productName = shown;
+  // oxlint-disable-next-line typescript/no-non-null-assertion -- the bridged device basic information was just created
+  endpoint.getClusterServerOptions(BridgedDeviceBasicInformation)!.productName = shown;
+  return endpoint;
 }
 
 /**
@@ -192,15 +219,13 @@ export function createMainEndpoint(identity: EndpointIdentity, layout: Accessory
     DeviceTypeDefinition,
     ...DeviceTypeDefinition[],
   ];
-  const endpoint = new MatterbridgeEndpoint(deviceTypes, { id: identity.ids.resolve(identity.serial) })
-    .createDefaultIdentifyClusterServer()
-    .createDefaultBridgedDeviceBasicInformationClusterServer(
-      getDeviceName(identity.serial),
-      identity.serial,
-      identity.vendorId,
-      vendorName,
-      identity.productName.slice(0, maxProductNameLength),
-    );
+  const endpoint = createBasicInformation(
+    new MatterbridgeEndpoint(deviceTypes, { id: identity.ids.resolve(identity.serial) }).createDefaultIdentifyClusterServer(),
+    getDeviceName(identity.serial),
+    identity.serial,
+    identity.vendorId,
+    identity.productName,
+  );
   if (layout.battery === undefined) endpoint.createDefaultPowerSourceWiredClusterServer();
   else endpoint.createDefaultPowerSourceBatteryClusterServer(null, PowerSource.BatChargeLevel.Ok, null);
   setInitialLabel(endpoint, identity);
@@ -221,16 +246,15 @@ export function createMainEndpoint(identity: EndpointIdentity, layout: Accessory
  */
 function createExtraEndpoint(identity: EndpointIdentity, unit: LayoutUnit): MatterbridgeEndpoint {
   const { label } = unit.feature;
-  const endpoint = new MatterbridgeEndpoint([getDeviceType(unit), bridgedNode, powerSource], { id: identity.ids.resolve(`${identity.serial}-${getUnitKey(unit)}`) })
-    .createDefaultIdentifyClusterServer()
-    .createDefaultBridgedDeviceBasicInformationClusterServer(
-      `${getDeviceName(identity.serial)} ${label}`,
-      `${identity.serial}-${unit.code}`.slice(0, maxDeviceNameLength),
-      identity.vendorId,
-      vendorName,
-      `Tuya ${label}`.slice(0, maxProductNameLength),
-    )
-    .createDefaultPowerSourceWiredClusterServer();
+  const endpoint = createBasicInformation(
+    new MatterbridgeEndpoint([getDeviceType(unit), bridgedNode, powerSource], {
+      id: identity.ids.resolve(`${identity.serial}-${getUnitKey(unit)}`),
+    }).createDefaultIdentifyClusterServer(),
+    `${getDeviceName(identity.serial)} ${label}`,
+    `${identity.serial}-${unit.code}`.slice(0, maxDeviceNameLength),
+    identity.vendorId,
+    `${vendorName} ${label}`,
+  ).createDefaultPowerSourceWiredClusterServer();
   return setInitialLabel(endpoint, identity, label);
 }
 

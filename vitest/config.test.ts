@@ -20,7 +20,6 @@ import {
   parseDeviceConfig,
   parseDeviceConfigs,
   hasSameEntry,
-  withExposureOf,
   withoutLocalKey,
 } from '../src/config.js';
 import { createDeviceConfig, createModelDeviceConfig, motionModel, plugFile, stripFile } from './fakeTuya.js';
@@ -153,11 +152,6 @@ describe('config', () => {
     expect(hasSameExposure(desk, { ...desk, addedFeatures: ['device.childLock'] })).toBe(false);
   });
 
-  test('should take the exposure and the catalog entry of another device, and keep the rest', () => {
-    const desk = createDeviceConfig(stripFile);
-    const other = createDeviceConfig(plugFile, { name: 'Hall', isComposed: false, hiddenFeatures: ['meter'], addedFeatures: ['x.on'] });
-    expect(withExposureOf(desk, other)).toEqual({ ...desk, catalogFile: plugFile, isComposed: false, hiddenFeatures: ['meter'], addedFeatures: ['x.on'] });
-  });
   test('should read a device stored with the model of the device and its category, instead of a catalog file', () => {
     const motion = createModelDeviceConfig();
     expect(parseDeviceConfig(motion)).toEqual(motion);
@@ -190,14 +184,5 @@ describe('config', () => {
     expect(hasSameEntry(motion, { ...motion, model: { ...motionModel } })).toBe(true);
     expect(hasSameEntry(motion, { ...motion, category: 'hps' })).toBe(false);
     expect(hasSameEntry(motion, { ...motion, model: { '1': motionModel['1'] } })).toBe(false);
-  });
-
-  test('should take the model and the category of another device, in place of a catalog file', () => {
-    const desk = createDeviceConfig(stripFile, { category: 'pc' });
-    const motion = createModelDeviceConfig({ isComposed: false });
-    const { catalogFile: _catalogFile, ...rest } = desk;
-    expect(withExposureOf(desk, motion)).toEqual({ ...rest, model: motionModel, category: 'pir', isComposed: false });
-    const { model: _model, ...plain } = motion;
-    expect(withExposureOf(motion, desk)).toEqual({ ...plain, catalogFile: stripFile, isComposed: true });
   });
 });

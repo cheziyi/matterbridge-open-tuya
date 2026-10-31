@@ -479,24 +479,3 @@ export function hasSameExposure(left: TuyaDeviceConfig, right: TuyaDeviceConfig)
     hasSameEntry(left, right) && left.isComposed === right.isComposed && sameIds(left.hiddenFeatures, right.hiddenFeatures) && sameIds(left.addedFeatures, right.addedFeatures)
   );
 }
-
-/**
- * Take the settings that decide the endpoints of a device from another device
- *
- * A running device keeps the ones it was built with: a change of them reaches Matter when the device is built again,
- * at the next start of Matterbridge.
- *
- * @param {TuyaDeviceConfig} device The device, whose other settings are kept.
- * @param {TuyaDeviceConfig} source The device whose exposure settings are taken.
- * @returns {TuyaDeviceConfig} The device with the exposure settings and the catalog entry or the model of the source.
- */
-export function withExposureOf(device: TuyaDeviceConfig, source: TuyaDeviceConfig): TuyaDeviceConfig {
-  const { catalogFile: _catalogFile, model: _model, ...rest } = device;
-  return {
-    ...rest,
-    ...(source.catalogFile === undefined ? { model: source.model, category: source.category } : { catalogFile: source.catalogFile }),
-    isComposed: source.isComposed,
-    hiddenFeatures: [...source.hiddenFeatures],
-    addedFeatures: [...source.addedFeatures],
-  };
-}

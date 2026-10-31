@@ -74,13 +74,3 @@ export function getAccessoryLayout(exposure: TuyaDeviceExposure, features: Devic
   if (features.battery !== undefined) layout.battery = features.battery;
   return layout;
 }
-
-/**
- * List the units of a layout, the main one first
- *
- * @param {AccessoryLayout} layout The layout.
- * @returns {LayoutUnit[]} The main unit, then the sides.
- */
-export function listUnits(layout: AccessoryLayout): LayoutUnit[] {
-  return [layout.main, ...layout.sides];
-}

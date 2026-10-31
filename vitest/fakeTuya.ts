@@ -110,6 +110,7 @@ export function createCloudDevice(file: string, overrides: Partial<TuyaCloudDevi
 /** A device client whose every call is a mock, and whose pushes a test sends. */
 export interface FakeClient extends DeviceClient {
   connected: boolean;
+  readDataPoints: Mock<() => Promise<DataPoints>>;
   readControls: Mock<() => Promise<ControlValues>>;
   writeControls: Mock<(values: ControlValues) => Promise<void>>;
   onControls: Mock<(listener: (values: ControlValues) => void) => () => void>;
@@ -131,6 +132,7 @@ export function createFakeClient(values: ControlValues): FakeClient {
   const client: FakeClient = {
     connected: true,
     values,
+    readDataPoints: vi.fn(async () => Promise.resolve({ '1': true })),
     readControls: vi.fn(async () => Promise.resolve(client.values)),
     writeControls: vi.fn(async () => Promise.resolve()),
     onControls: vi.fn((listener: (values: ControlValues) => void) => {
@@ -155,7 +157,7 @@ export function createFakeClient(values: ControlValues): FakeClient {
  * @returns {DeviceConnection} The connection.
  */
 export function connectionOf(client: FakeClient, overrides: Partial<Omit<DeviceConnection, 'client'>> = {}): DeviceConnection {
-  return { client, hasLan: true, hasCloud: true, isOnLan: () => true, ...overrides };
+  return { client, hasLan: true, isOnLan: () => true, ...overrides };
 }
 
 /** A raw route whose every call is a mock. */

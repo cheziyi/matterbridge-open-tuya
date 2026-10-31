@@ -61,14 +61,16 @@ export const lanVersions: readonly LanVersion[] = ['3.1', '3.2', '3.3', '3.4', '
 export const meterFeatureId = 'meter';
 
 /**
- * Call the plugin.
+ * Call the plugin
  *
- * @param route The method and the path, such as `POST probe`.
- * @param body The JSON body.
- * @param query The query string, without its `?`.
- * @returns The reply, with `ok: false` and the reason when the call did not work.
+ * Every request is a GET or a POST, so that every reply has a body that says whether it worked: Matterbridge answers
+ * a DELETE with 204 and no body, whatever the plugin returns.
+ *
+ * @param {R} route The method and the path, such as `POST probe`.
+ * @param {unknown} [body] The JSON body.
+ * @returns {Promise<Reply<R>>} The reply, with `ok: false` and the reason when the call did not work.
  */
-export async function api<R extends Route>(route: R, body?: unknown, query?: string): Promise<Reply<R>> {
+export async function api<R extends Route>(route: R, body?: unknown): Promise<Reply<R>> {
   try {
     const [method, path] = route.split(' ');
     const init: RequestInit = { method };
@@ -76,8 +78,7 @@ export async function api<R extends Route>(route: R, body?: unknown, query?: str
       init.headers = { 'Content-Type': 'application/json' };
       init.body = JSON.stringify(body);
     }
-    const response = await fetch(new URL(`api/${path}${query === undefined ? '' : `?${query}`}`, document.baseURI), init);
-    if (response.status === 204) return { ok: true } as Reply<R>;
+    const response = await fetch(new URL(`api/${path}`, document.baseURI), init);
     if (response.status === 503) return { ok: false, error: 'The plugin is not running. Start it in Matterbridge, then reload this page.' };
     const reply = (await response.json()) as Reply<R> | { error?: string };
     if ('ok' in reply) return reply;

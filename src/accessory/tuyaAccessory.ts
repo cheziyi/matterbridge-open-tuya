@@ -25,9 +25,9 @@ import type { MatterbridgeEndpoint } from 'matterbridge';
 import type { AnsiLogger } from 'matterbridge/logger';
 import { type ActionContext, Node } from 'matterbridge/matter';
 import { BridgedDeviceBasicInformation, OnOff } from 'matterbridge/matter/clusters';
-import type { ControlValues, RoutedTuyaClient, TuyaDeviceEntry, TuyaErrorCode } from 'open-tuya';
+import type { ControlValues, DataPoints, RoutedTuyaClient, TuyaDeviceEntry, TuyaErrorCode } from 'open-tuya';
 
-import { type TuyaDeviceConfig, withExposureOf } from '../config.js';
+import type { TuyaDeviceConfig } from '../config.js';
 import { getErrorCode, getErrorMessage } from '../errors.js';
 import type { DeviceFeatures, SwitchFeature } from '../features.js';
 import { EndpointIds } from '../platform/endpointIds.js';
@@ -42,15 +42,13 @@ const unreachableAfterFailures = 2;
 export type DeviceRoute = 'lan' | 'cloud';
 
 /** What a device's client takes and gives: the part of `RoutedTuyaClient` the accessory calls. */
-export type DeviceClient = Pick<RoutedTuyaClient, 'connected' | 'readControls' | 'writeControls' | 'onControls' | 'close'>;
+export type DeviceClient = Pick<RoutedTuyaClient, 'connected' | 'readDataPoints' | 'readControls' | 'writeControls' | 'onControls' | 'close'>;
 
 /** The client of a device, and which of its routes are there. */
 export interface DeviceConnection {
   client: DeviceClient;
   /** Whether a route on the LAN is there, directly or through a gateway. */
   hasLan: boolean;
-  /** Whether a route through the cloud is there. */
-  hasCloud: boolean;
   /** Whether the route on the LAN is connected now, which the client tries first. */
   isOnLan: () => boolean;
 }
@@ -143,7 +141,6 @@ export class TuyaAccessory implements AccessoryEndpoints {
   readonly layout: AccessoryLayout;
   /** The catalog entry the endpoints were built from: a client of the device names its controls by it until the device is built again. */
   readonly entry: TuyaDeviceEntry;
-  private config: TuyaDeviceConfig;
   private readonly log: AnsiLogger;
   private readonly identity: EndpointIdentity;
   /** The main endpoint, when the other endpoints of the device are its parts. */
@@ -176,7 +173,6 @@ export class TuyaAccessory implements AccessoryEndpoints {
    * @throws {Error} When the device has neither an outlet nor a sensor to show.
    */
   constructor(options: TuyaAccessoryOptions) {
-    this.config = options.config;
     this.entry = options.entry;
     this.log = options.log;
     this.createConnection = options.createConnection;
@@ -255,18 +251,18 @@ export class TuyaAccessory implements AccessoryEndpoints {
   }
 
   /**
-   * Take a new configuration: the name, the connection and whatever else changes no endpoint
+   * Take a new configuration: the name is all of it that reaches a running device
    *
    * A new name is written to the label of each endpoint that is a device of its own in Matter, which is what the Matter
    * apps show. The settings that decide the endpoints stay as the device was built: a change of them reaches Matter
-   * when the device is built again, at the next start of Matterbridge.
+   * when the device is built again, at the next start of Matterbridge. The connection is the platform's to replace,
+   * through `updateConnection`.
    *
    * @param {TuyaDeviceConfig} config The updated device.
    * @returns {Promise<void>} Resolves when a new name is written to the endpoints.
    */
   async updateConfig(config: TuyaDeviceConfig): Promise<void> {
     const previous = this.name;
-    this.config = withExposureOf(config, this.config);
     if (config.name === previous) return;
     this.name = config.name;
     await applyDeviceLabel(this.endpoints, config.name);
@@ -299,12 +295,29 @@ export class TuyaAccessory implements AccessoryEndpoints {
   }
 
   /**
-   * The device's configuration as the accessory holds it
+   * Read the data points of the device through its running client, for a check of the device in the setup page
    *
-   * @returns {TuyaDeviceConfig} The configuration, with the exposure the endpoints were built with.
+   * The read runs after the read or the write going on, like every other. A second client on the LAN would take the
+   * one connection the device holds: the setup page checks a running device through this instead.
+   *
+   * @returns {Promise<DataPoints>} The data points the device reports.
+   * @throws {Error} When the device has no route, or no route answers.
    */
-  get deviceConfig(): TuyaDeviceConfig {
-    return this.config;
+  async readDataPoints(): Promise<DataPoints> {
+    return this.enqueue(async () => {
+      const client = this.connection?.client;
+      if (client === undefined) throw new Error(noRouteMessage);
+      return client.readDataPoints();
+    });
+  }
+
+  /**
+   * Tell whether the route on the LAN is connected now, which the client tries first
+   *
+   * @returns {boolean} True while it is: false without a route on the LAN, or while it is not connected.
+   */
+  isOnLan(): boolean {
+    return this.connection?.isOnLan() === true;
   }
 
   private openConnection(): void {
@@ -473,7 +486,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
     if (this.isWaitingForNode()) return;
     try {
       await this.setReachable(true);
-      await applyValues(this, this.layout, changed);
+      await applyValues(this, this.layout, values, changed);
     } catch (error) {
       this.log.warn(`"${this.name}" state could not be written to Matter: ${getErrorMessage(error)}`);
     }

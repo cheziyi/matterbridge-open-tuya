@@ -36,10 +36,7 @@ export const SENSOR_KINDS = ['temperature', 'humidity', 'illuminance', 'occupanc
 export type SensorKind = (typeof SENSOR_KINDS)[number];
 
 /** Whether a catalog entry describes a device this plugin controls, or why not. */
-export const ENTRY_SUPPORTS = ['supported', 'otherKind', 'noControls'] as const;
-
-/** Whether a catalog entry describes a device this plugin controls: one of `ENTRY_SUPPORTS`. */
-export type EntrySupport = (typeof ENTRY_SUPPORTS)[number];
+export type EntrySupport = 'supported' | 'otherKind' | 'noControls';
 
 /** Where a control is in the controls `readControls` gives: its component and its name. */
 export interface ControlRef {

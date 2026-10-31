@@ -103,21 +103,26 @@ export interface DeveloperSignInRequest {
   dataCenter: DeveloperDataCenter;
 }
 
-/** What each request carries back when it worked, by its method and its path. The setup page reads its replies by it. */
+/**
+ * What each request carries back when it worked, by its method and its path. The setup page reads its replies by it.
+ *
+ * Every request is a GET or a POST: Matterbridge answers a DELETE with 204 and no body, whatever the plugin returns,
+ * which would hide a failure from the page.
+ */
 export interface SetupReplies {
   'GET state': { state: SetupState };
   'POST qr-code': { login: QrLoginState };
   'GET qr-login': { login: QrLoginState; state: SetupState };
-  /** Nothing but that it worked. Matterbridge answers a DELETE with 204 and no body. */
-  'DELETE qr-code': object;
+  /** Nothing but that it worked. */
+  'POST cancel-qr-code': object;
   'POST developer-login': { state: SetupState };
-  'DELETE account': object;
+  'POST sign-out': object;
   'POST devices': { devices: FoundDevice[] };
   /** The state once the device list of the account was read again, as the page asks when it opens. */
   'POST sync': { state: SetupState };
   'POST probe': { result: ProbeResult };
   'POST device': { state: SetupState };
-  'DELETE device': object;
+  'POST remove-device': object;
 }
 
 /** Every reply says whether the request worked, so the page never has to read an HTTP status. */
@@ -190,11 +195,19 @@ async function handlePost(platform: SetupPlatform, path: string, body: Record<st
     if (!userCodePattern.test(userCode)) return fail('Enter the User Code the Smart Life app shows under Settings > Account and Security');
     return { ok: true, login: await platform.startQrLogin(userCode) };
   }
+  if (path === 'cancel-qr-code') {
+    platform.cancelQrLogin();
+    return { ok: true };
+  }
   if (path === 'developer-login') {
     const request = parseDeveloperSignIn(body);
     if (typeof request === 'string') return fail(request);
     await platform.signInDeveloper(request);
     return { ok: true, state: await platform.getSetupState() };
+  }
+  if (path === 'sign-out') {
+    await platform.signOut();
+    return { ok: true };
   }
   if (path === 'devices') return { ok: true, devices: await platform.listDevices() };
   if (path === 'sync') {
@@ -214,15 +227,20 @@ async function handlePost(platform: SetupPlatform, path: string, body: Record<st
     await platform.saveDevice(device);
     return { ok: true, state: await platform.getSetupState() };
   }
+  if (path === 'remove-device') {
+    const { deviceId } = body;
+    if (!isValidDeviceId(deviceId)) return fail('Give the device ID of the device to remove');
+    return (await platform.removeDevice(deviceId)) ? { ok: true } : fail(`No device has the device ID ${deviceId}`);
+  }
   return undefined;
 }
 
 /**
  * Serve one request of the setup page
  *
- * Paths: `GET state`, `POST qr-code`, `GET qr-login`, `DELETE qr-code`, `POST developer-login`, `DELETE account`,
- * `POST devices`, `POST sync`, `POST probe`, `POST device` and `DELETE device?deviceId=`. The session of an account,
- * the secret of a cloud project and the local key of a device are never returned.
+ * Paths: `GET state`, `POST qr-code`, `GET qr-login`, `POST cancel-qr-code`, `POST developer-login`, `POST sign-out`,
+ * `POST devices`, `POST sync`, `POST probe`, `POST device` and `POST remove-device`. The session of an account, the
+ * secret of a cloud project and the local key of a device are never returned.
  *
  * Edge cases:
  *  - a path that is not served -> undefined, which Matterbridge answers with 404
@@ -231,28 +249,14 @@ async function handlePost(platform: SetupPlatform, path: string, body: Record<st
  * @param {SetupPlatform} platform The platform.
  * @param {string} method The HTTP method.
  * @param {string} [path] The path after `api/`.
- * @param {Record<string, unknown>} [query] The query string parameters.
  * @param {unknown} [body] The parsed JSON body.
  * @returns {Promise<SetupReply | undefined>} The reply.
  */
-export async function handleSetupRequest(platform: SetupPlatform, method: string, path?: string, query?: Record<string, unknown>, body?: unknown): Promise<SetupReply | undefined> {
+export async function handleSetupRequest(platform: SetupPlatform, method: string, path?: string, body?: unknown): Promise<SetupReply | undefined> {
   try {
     if (method === 'GET' && path === 'state') return { ok: true, state: await platform.getSetupState() };
     if (method === 'GET' && path === 'qr-login') return { ok: true, login: platform.getQrLogin(), state: await platform.getSetupState() };
     if (method === 'POST' && path !== undefined) return await handlePost(platform, path, toRecord(body));
-    if (method === 'DELETE' && path === 'qr-code') {
-      platform.cancelQrLogin();
-      return { ok: true };
-    }
-    if (method === 'DELETE' && path === 'account') {
-      await platform.signOut();
-      return { ok: true };
-    }
-    if (method === 'DELETE' && path === 'device') {
-      const deviceId = query?.deviceId;
-      if (!isValidDeviceId(deviceId)) return fail('Give the device ID of the device to remove');
-      return (await platform.removeDevice(deviceId)) ? { ok: true } : fail(`No device has the device ID ${deviceId}`);
-    }
     return undefined;
   } catch (error) {
     return fail(getErrorMessage(error));

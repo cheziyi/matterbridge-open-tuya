@@ -73,17 +73,19 @@ function getTemperatureUnit(values: ControlValues, feature: SensorFeature): stri
  * Write the value of one unit to its endpoint
  *
  * Edge cases:
- *  - a control the values do not carry, such as one a push leaves out, keeps what the endpoint shows
+ *  - a control the changed values do not carry, such as one a push leaves out, keeps what the endpoint shows
  *  - a reading that is not a number keeps what the endpoint shows
  *  - a contact sensor that reads open shows no contact
+ *  - a temperature is read in the unit the device last reported, pushed with the temperature or before it
  *
  * @param {MatterbridgeEndpoint} endpoint The endpoint of the unit.
  * @param {LayoutUnit} unit The unit.
- * @param {ControlValues} values The controls the device reports.
+ * @param {ControlValues} values Every control the device reports, as last known.
+ * @param {ControlValues} changed The controls that changed, among them: the ones to write.
  * @returns {Promise<void>} Resolves when the attribute is written.
  */
-async function applyUnit(endpoint: MatterbridgeEndpoint, unit: LayoutUnit, values: ControlValues): Promise<void> {
-  const value = readValue(values, unit.feature);
+async function applyUnit(endpoint: MatterbridgeEndpoint, unit: LayoutUnit, values: ControlValues, changed: ControlValues): Promise<void> {
+  const value = readValue(changed, unit.feature);
   if (value === undefined) return;
   if (unit.type !== 'sensor') {
     await endpoint.updateAttribute(OnOff, 'onOff', toBoolean(value));
@@ -150,20 +152,22 @@ async function applyBattery(endpoint: MatterbridgeEndpoint, battery: NonNullable
 /**
  * Write the controls a device reports to its Matter endpoints
  *
- * The values can be all of the controls, as a read gives them, or some, as a push gives them: what they leave out
- * stays as it is.
+ * A read gives all of the controls, which are written. A push gives the controls that changed, which are written,
+ * while the others stay as they are: a value that is read with another control, such as a temperature with its unit,
+ * takes that control from every control last known.
  *
  * @param {AccessoryEndpoints} accessory The endpoints of the device.
  * @param {AccessoryLayout} layout How the features of the device are laid out.
- * @param {ControlValues} values The controls the device reports.
+ * @param {ControlValues} values Every control the device reports, as last known.
+ * @param {ControlValues} [changed] The controls that changed, among them. Defaults to every control.
  * @returns {Promise<void>} Resolves when every value is written.
  */
-export async function applyValues(accessory: AccessoryEndpoints, layout: AccessoryLayout, values: ControlValues): Promise<void> {
-  await applyUnit(accessory.endpoint, layout.main, values);
+export async function applyValues(accessory: AccessoryEndpoints, layout: AccessoryLayout, values: ControlValues, changed: ControlValues = values): Promise<void> {
+  await applyUnit(accessory.endpoint, layout.main, values, changed);
   for (const unit of layout.sides) {
     const endpoint = accessory.sideEndpoints.get(unit.feature.id);
-    if (endpoint !== undefined) await applyUnit(endpoint, unit, values);
+    if (endpoint !== undefined) await applyUnit(endpoint, unit, values, changed);
   }
-  if (layout.meter !== undefined) await applyMeter(accessory.endpoint, layout.meter, values);
-  if (layout.battery !== undefined) await applyBattery(accessory.endpoint, layout.battery, values);
+  if (layout.meter !== undefined) await applyMeter(accessory.endpoint, layout.meter, changed);
+  if (layout.battery !== undefined) await applyBattery(accessory.endpoint, layout.battery, changed);
 }
