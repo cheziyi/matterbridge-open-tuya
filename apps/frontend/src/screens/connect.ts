@@ -26,7 +26,12 @@ import { button, notice, steps, unitHeader, unitStrip } from '../components.js';
 import { type Child, h } from '../dom.js';
 import { currentDraft, deviceLabel, type Draft, view } from '../state.js';
 
-/** What stands in the way of the device, or what the page needs before it can go on: nothing while the check has no answer. */
+/**
+ * Show what stands in the way of the device, or what the page needs before it can go on
+ *
+ * @param {Draft} draft The device.
+ * @returns {Child} The panel, or null while the check has no answer, or the device answered.
+ */
 function statusPanel(draft: Draft): Child {
   const status = draft.probe?.status;
   const label = draft.name === '' ? 'The device' : draft.name;
@@ -51,6 +56,11 @@ function statusPanel(draft: Draft): Child {
   return null;
 }
 
+/**
+ * Draw the Connect step: the check of the device the run is on
+ *
+ * @returns {Child[]} The screen.
+ */
 export function connectScreen(): Child[] {
   const draft = currentDraft();
   if (draft === undefined) return [notice()];

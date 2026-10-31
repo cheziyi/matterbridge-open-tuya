@@ -27,19 +27,35 @@ import { type Draft, view } from './state.js';
 /** The longest name Matter takes. */
 const maxNameLength = 32;
 
-/** Copy the choices of how a device appears in Matter, and nothing else. */
+/**
+ * Copy the choices of how a device appears in Matter, and nothing else
+ *
+ * @param {Exposure} source What to copy them from.
+ * @returns {Exposure} The choices.
+ */
 export function pickExposure(source: Exposure): Exposure {
   return { hiddenFeatures: [...source.hiddenFeatures], addedFeatures: [...source.addedFeatures], isComposed: source.isComposed };
 }
 
-/** The feature that is the device itself, and always shown: its first outlet, or its first sensor when it has no outlet. */
+/**
+ * Get the feature that is the device itself, and always shown: its first outlet, or its first sensor when it has no outlet
+ *
+ * @param {DeviceFeatures} features What the device can show.
+ * @returns {string | undefined} The id of the feature, or undefined for a device with neither.
+ */
 export function mainFeatureId(features: DeviceFeatures): string | undefined {
   return (features.outlets[0] ?? features.sensors[0])?.id;
 }
 
 /**
- * Drop the choices a device has no use for: a feature it does not have is neither left out nor added, so that the
- * options stored are those of what it can do.
+ * Drop the choices a device has no use for
+ *
+ * A feature the device does not have is neither left out nor added, so that the options stored are those of what it
+ * can do.
+ *
+ * @param {Exposure} exposure The choices.
+ * @param {DeviceFeatures} features What the device can show.
+ * @returns {Exposure} The choices that apply to it.
  */
 export function fitExposure(exposure: Exposure, features: DeviceFeatures): Exposure {
   const main = mainFeatureId(features);
@@ -53,7 +69,13 @@ export function fitExposure(exposure: Exposure, features: DeviceFeatures): Expos
   };
 }
 
-/** A name no device has yet: the name in the Smart Life app, or that name with a number after it, such as "Desk Lamp 2". */
+/**
+ * Find a name no device has yet: the name in the Smart Life app, or that name with a number after it, such as "Desk Lamp 2"
+ *
+ * @param {string} base The name in the Smart Life app.
+ * @param {ReadonlySet<string>} taken The names in use.
+ * @returns {string} The name, of at most 32 characters.
+ */
 function uniqueName(base: string, taken: ReadonlySet<string>): string {
   const trimmed = base.trim().slice(0, maxNameLength).trimEnd();
   if (trimmed === '' || !taken.has(trimmed)) return trimmed;
@@ -65,8 +87,12 @@ function uniqueName(base: string, taken: ReadonlySet<string>): string {
 }
 
 /**
- * The drafts of the devices picked in the Find step, each named after its name in the Smart Life app. Two devices can
- * share a name there, so each draft gets one no stored device and no draft before it has.
+ * Draft the devices picked in the Find step, each named after its name in the Smart Life app
+ *
+ * Two devices can share a name there, so each draft gets one no stored device and no draft before it has.
+ *
+ * @param {readonly ListedDevice[]} devices The devices picked.
+ * @returns {Draft[]} The drafts, new and with nothing left out or added yet.
  */
 export function draftsFromDevices(devices: readonly ListedDevice[]): Draft[] {
   const taken = new Set((view.setup?.devices ?? []).map((device) => device.name));
@@ -87,6 +113,12 @@ export function draftsFromDevices(devices: readonly ListedDevice[]): Draft[] {
   });
 }
 
+/**
+ * Draft a stored device, to check it again and change its options
+ *
+ * @param {StoredDevice} device The device as the plugin stores it.
+ * @returns {Draft} The draft, with its options as stored.
+ */
 export function draftFromStored(device: StoredDevice): Draft {
   return {
     device: { deviceId: device.deviceId, cloudName: device.cloudName, productKey: device.productKey, category: device.category },

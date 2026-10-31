@@ -80,6 +80,11 @@ function deviceRow(device: ListedDevice): HTMLElement {
   );
 }
 
+/**
+ * Draw the Find step: the devices of the account, to pick the ones to set up
+ *
+ * @returns {Child[]} The screen.
+ */
 export function findScreen(): Child[] {
   const chosen = view.devices.filter((device) => view.selected.has(device.deviceId) && isSelectable(device));
   const continueLabel = chosen.length === 1 ? 'Set up 1 device' : `Set up ${chosen.length} devices`;

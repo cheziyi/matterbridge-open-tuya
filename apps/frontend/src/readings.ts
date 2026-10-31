@@ -41,11 +41,11 @@ function describeSensor(feature: SensorFeature, value: boolean | number | string
 }
 
 /**
- * Describe what a device reports, such as "Outlet 1 on, Outlet 2 off, 12.3 W, 230 V".
+ * Describe what a device reports, such as "Outlet 1 on, Outlet 2 off, 12.3 W, 230 V"
  *
- * @param features What the device can show.
- * @param values The controls it reported.
- * @returns The description, or an empty text when it reported none of them.
+ * @param {DeviceFeatures | undefined} features What the device can show.
+ * @param {Values | undefined} values The controls it reported.
+ * @returns {string} The description, or an empty text when it reported none of them.
  */
 export function describeReadings(features: DeviceFeatures | undefined, values: Values | undefined): string {
   if (features === undefined || values === undefined) return '';

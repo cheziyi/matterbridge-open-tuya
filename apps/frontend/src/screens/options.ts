@@ -234,6 +234,11 @@ function connectionSection(draft: Draft): HTMLElement {
   );
 }
 
+/**
+ * Draw the Options step: the name, the features, the layout and the connection of the device the run is on
+ *
+ * @returns {Child[]} The screen.
+ */
 export function optionsScreen(): Child[] {
   const draft = currentDraft();
   if (draft === undefined) return [notice()];

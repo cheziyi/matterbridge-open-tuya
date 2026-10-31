@@ -26,10 +26,10 @@ import qrcode from 'qrcode-generator';
 import { h } from './dom.js';
 
 /**
- * Draw a text as a QR code.
+ * Draw a text as a QR code
  *
- * @param text The text, such as the one the plugin gives for the sign in.
- * @returns The QR code, as a scalable drawing in a light box.
+ * @param {string} text The text, such as the one the plugin gives for the sign in.
+ * @returns {HTMLElement} The QR code, as a scalable drawing in a light box.
  */
 export function qrCodeElement(text: string): HTMLElement {
   // Type 0 picks the smallest QR code the text fits in, at the middle level of error correction.

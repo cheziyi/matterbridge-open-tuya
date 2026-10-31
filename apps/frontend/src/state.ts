@@ -65,6 +65,7 @@ export interface SignIn {
   dataCenter: DataCenter;
 }
 
+/** What the page knows at any moment: the screen it is on, the state the plugin sent, and what the user is doing. */
 export const view = {
   screen: 'loading' as ScreenName,
   setup: undefined as SetupState | undefined,
@@ -86,16 +87,32 @@ export const view = {
   confirmingSignOut: false,
 };
 
+/**
+ * Get the device the run is on
+ *
+ * @returns {Draft | undefined} The device, or undefined when no run is going on.
+ */
 export function currentDraft(): Draft | undefined {
   return view.queue[0];
 }
 
-/** What a device is called on the page: its name, or its device ID until it has one. */
+/**
+ * Get what a device is called on the page: its name, or its device ID until it has one
+ *
+ * @param {Draft} draft The device.
+ * @returns {string} The name, or the device ID.
+ */
 export function draftLabel(draft: Draft): string {
   return draft.name === '' ? draft.device.deviceId : draft.name;
 }
 
-/** A device as the Smart Life app knows it, to tell it apart: its name there and its device ID. */
+/**
+ * Describe a device as the Smart Life app knows it, to tell it apart: its product, its device ID and its name there
+ *
+ * @param {DraftDevice} device The device.
+ * @param {string} [productName] The name the product is sold under, once the plugin found it.
+ * @returns {string} The description.
+ */
 export function deviceLabel(device: DraftDevice, productName?: string): string {
   const product = productName === undefined ? 'device' : productName;
   return device.cloudName === undefined ? `${product} ${device.deviceId}` : `${product} ${device.deviceId}, named "${device.cloudName}" in the Smart Life app`;

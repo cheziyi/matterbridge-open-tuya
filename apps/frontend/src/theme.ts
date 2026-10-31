@@ -21,7 +21,11 @@
  * limitations under the License.
  */
 
-/** Take the colours and the font of the Matterbridge page this one is shown in. */
+/**
+ * Take the colours and the font of the Matterbridge page this one is shown in
+ *
+ * @returns {void}
+ */
 export function adoptHostTheme(): void {
   try {
     if (window.parent === window) return;

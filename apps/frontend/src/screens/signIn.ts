@@ -144,6 +144,11 @@ function developerForm(): Child[] {
   ];
 }
 
+/**
+ * Draw the sign in: by QR code with the Smart Life app, or with a cloud project of the Tuya developer platform
+ *
+ * @returns {Child[]} The screen.
+ */
 export function signInScreen(): Child[] {
   const isAgain = view.setup?.account !== undefined;
   const isWaiting = view.login.status === 'waiting';

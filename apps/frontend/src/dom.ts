@@ -24,12 +24,12 @@
 export type Child = Node | string | false | null | undefined;
 
 /**
- * Create an element.
+ * Create an element
  *
- * @param tag The tag name.
- * @param props `class`, `on<event>` listeners, and anything else as a property when the element has it, else an attribute.
- * @param children Nodes or text; false, null and undefined are skipped.
- * @returns The element.
+ * @param {K} tag The tag name.
+ * @param {Record<string, unknown>} [props] `class`, `on<event>` listeners, and anything else as a property when the element has it, else an attribute.
+ * @param {...Child} children Nodes or text; false, null and undefined are skipped.
+ * @returns {HTMLElementTagNameMap[K]} The element.
  */
 export function h<K extends keyof HTMLElementTagNameMap>(tag: K, props: Record<string, unknown> = {}, ...children: Child[]): HTMLElementTagNameMap[K] {
   const element = document.createElement(tag);
