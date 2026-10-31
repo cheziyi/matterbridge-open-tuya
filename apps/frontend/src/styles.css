@@ -1,0 +1,644 @@
+/*
+ * The setup page is shown inside a Matterbridge dialog, so it wears the host's colours and font: adoptHostTheme()
+ * in app.ts copies them into the --host-* properties. The values below are what it falls back to on its own.
+ */
+:root {
+  color-scheme: light dark;
+  --surface: var(--host-div-bg-color, light-dark(#ffffff, #1b1d21));
+  --text: var(--host-div-text-color, light-dark(#212121, #c9c9c9));
+  --muted: var(--host-main-label-color, light-dark(#616161, #8f949b));
+  --accent: var(--host-primary-color, light-dark(#1976d2, #2196f3));
+  --line: color-mix(in srgb, var(--text) 22%, transparent);
+  --wash: color-mix(in srgb, var(--text) 6%, transparent);
+  --accent-wash: color-mix(in srgb, var(--accent) 14%, transparent);
+  --danger: light-dark(#b3261e, #f2776d);
+  --good: light-dark(#1b7f3b, #57c27a);
+  --radius: 6px;
+  font-family: var(--host-font, Roboto, 'Helvetica Neue', Arial, sans-serif);
+  font-size: 15px;
+  line-height: 1.5;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--text);
+}
+
+main {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.5rem 2.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1.5rem;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 1.45rem;
+  font-weight: 500;
+  line-height: 1.25;
+  text-wrap: balance;
+}
+
+h2 {
+  font-size: 1.05rem;
+  font-weight: 500;
+}
+
+h3 {
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.lead {
+  max-width: 62ch;
+}
+
+.meta,
+.help {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.help {
+  max-width: 68ch;
+}
+
+code {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 0.88rem;
+  overflow-wrap: anywhere;
+}
+
+section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+}
+
+/* Which unit the page is on, when a run sets up several. */
+.units {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.units li {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 9rem;
+  min-width: 0;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+}
+
+.units strong {
+  overflow: hidden;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.units .current {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+  color: var(--text);
+}
+
+.units .done strong::before {
+  content: '✓ ';
+  color: var(--accent);
+}
+
+.units .skipped strong {
+  text-decoration: line-through;
+}
+
+.unit-header {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.25rem;
+}
+
+.unit-header .meta {
+  max-width: 68ch;
+}
+
+/* The steps are a real sequence, so they are numbered. */
+.steps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 1.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  counter-reset: step;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.steps li {
+  counter-increment: step;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.steps li::before {
+  content: counter(step);
+  display: grid;
+  place-items: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.steps li.current {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.steps li.current::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.steps li.done::before {
+  content: '✓';
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.button {
+  font: inherit;
+  font-weight: 500;
+  padding: 0.45rem 0.95rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.button:hover:not(:disabled) {
+  background: var(--wash);
+}
+
+.button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.button.primary:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 86%, #000);
+}
+
+.button.danger {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type='text'],
+input[type='email'],
+input[type='password'],
+select {
+  font: inherit;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--wash);
+  color: var(--text);
+}
+
+input[type='radio'],
+input[type='checkbox'] {
+  accent-color: var(--accent);
+  width: 1.05rem;
+  height: 1.05rem;
+  margin: 0.2rem 0 0;
+  flex: none;
+}
+
+.inline-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.inline-form input {
+  flex: 1 1 14rem;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+/* The label of the field alone, not that of each choice in it. */
+.field > label {
+  font-weight: 500;
+}
+
+.field select {
+  align-self: flex-start;
+  max-width: 100%;
+}
+
+.choices {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.choice > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+  flex: 1;
+}
+
+.choice strong {
+  font-weight: 500;
+}
+
+.choice:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.choice.pictured {
+  align-items: center;
+}
+
+.choice.pictured input {
+  margin: 0;
+}
+
+/* The drawings show what a choice does to the airflow: stepped, continuous, both axes, or left alone. */
+.glyph {
+  flex: none;
+  width: 3rem;
+  height: 1.75rem;
+  color: var(--muted);
+}
+
+.glyph svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  fill: currentColor;
+}
+
+.glyph .stroke {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.choice:has(input:checked) .glyph {
+  color: var(--accent);
+}
+
+.preset-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+  gap: 0.5rem;
+}
+
+.preset {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.65rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.preset strong {
+  font-weight: 500;
+}
+
+.preset:hover {
+  background: var(--wash);
+}
+
+.preset[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+/* What a choice asks for besides itself, such as the switches it adds: under its title, out of the way of the next choice. */
+.sub {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin: 0 0 0.25rem 2.6rem;
+}
+
+/* A compact multi-select, for a list that full sized choices would make too long. */
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  /* The checkbox sits at the start of a fully rounded edge, so it needs as much room as the label at the other end. */
+  padding: 0.3rem 0.95rem 0.3rem 0.85rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  cursor: pointer;
+}
+
+.chip input {
+  margin: 0;
+}
+
+.chip:hover {
+  background: var(--wash);
+}
+
+.chip:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-wash);
+}
+
+.replacements {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+}
+
+.replacements label {
+  font-weight: 500;
+}
+
+.replacements select {
+  justify-self: start;
+  max-width: 100%;
+}
+
+.devices,
+.found-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+.device {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem 1.5rem;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.device-main {
+  flex: 1 1 18rem;
+  min-width: 0;
+}
+
+/* The Tuya account the devices are listed and reached through, above the list of devices. */
+.account {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.9rem 0;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.status {
+  font-weight: 500;
+  color: var(--text);
+}
+
+.status::before {
+  content: '';
+  display: inline-block;
+  width: 0.55rem;
+  height: 0.55rem;
+  margin-right: 0.4rem;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.status.online::before {
+  background: var(--good);
+}
+
+.status.offline::before,
+.status.stopped::before {
+  background: var(--danger);
+}
+
+.status.connecting::before {
+  background: var(--muted);
+}
+
+.found {
+  border-bottom: 1px solid var(--line);
+}
+
+.found label {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  cursor: pointer;
+}
+
+.found.unavailable label {
+  cursor: default;
+  color: var(--muted);
+}
+
+.found .note {
+  display: block;
+}
+
+.empty {
+  padding: 1rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  color: var(--muted);
+  max-width: 68ch;
+}
+
+details {
+  display: flex;
+  flex-direction: column;
+}
+
+details > * + * {
+  margin-top: 0.6rem;
+}
+
+summary {
+  cursor: pointer;
+  font-weight: 500;
+  width: fit-content;
+}
+
+.notice {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: var(--radius);
+  background: var(--wash);
+}
+
+.notice.problem {
+  background: color-mix(in srgb, var(--danger) 13%, transparent);
+}
+
+.problem-text {
+  color: var(--danger);
+}
+
+.spinner {
+  flex: none;
+  width: 1rem;
+  height: 1rem;
+  border: 2px solid var(--line);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .spinner {
+    animation-duration: 4s;
+  }
+}
+
+.footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  padding-top: 1.1rem;
+  border-top: 1px solid var(--line);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+@media (max-width: 30rem) {
+  main {
+    padding: 1rem 1rem 2rem;
+  }
+
+  .footer .button {
+    flex: 1 1 auto;
+  }
+
+  .sub {
+    margin-left: 0;
+  }
+}
+
+/* The QR code of the Smart Life sign in, drawn dark on light whatever the theme: the app reads it so. */
+.qr {
+  align-self: flex-start;
+  padding: 0.75rem;
+  border-radius: var(--radius);
+  background: #ffffff;
+  line-height: 0;
+}
+
+.qr svg {
+  display: block;
+  width: 14rem;
+  height: 14rem;
+}
+
+.readings {
+  font-variant-numeric: tabular-nums;
+}

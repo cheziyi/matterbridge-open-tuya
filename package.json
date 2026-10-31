@@ -1,48 +1,37 @@
 {
-  "name": "matterbridge-plugin-template",
-  "version": "2.2.1",
-  "description": "Matterbridge Template Plugin",
-  "author": "https://github.com/Luligu",
+  "name": "matterbridge-open-tuya",
+  "version": "0.1.0",
+  "description": "Matterbridge Open Tuya",
+  "author": "https://github.com/cheziyi",
   "license": "Apache-2.0",
-  "homepage": "https://www.npmjs.com/package/matterbridge-plugin-template",
-  "private": true,
+  "homepage": "https://github.com/cheziyi/matterbridge-open-tuya#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Luligu/matterbridge-plugin-template.git"
+    "url": "git+https://github.com/cheziyi/matterbridge-open-tuya.git"
   },
   "bugs": {
-    "url": "https://github.com/Luligu/matterbridge-plugin-template/issues"
-  },
-  "funding": {
-    "type": "buymeacoffee",
-    "url": "https://www.buymeacoffee.com/luligugithub"
+    "url": "https://github.com/cheziyi/matterbridge-open-tuya/issues"
   },
   "keywords": [
     "matterbridge",
     "plugin",
-    "template",
-    "matter.js",
-    "matter-node.js",
+    "tuya",
+    "smart-life",
+    "tuya-smart",
+    "smart-plug",
+    "power-strip",
+    "switch",
+    "sensor",
     "matter",
-    "matterprotocol",
+    "matter.js",
     "iot",
     "smarthome",
-    "connectedthings",
-    "hap",
     "homekit",
-    "siri",
     "google-home",
     "alexa",
     "homeassistant",
-    "smartthings",
-    "ewelink",
-    "homebridge",
     "bridge",
-    "childbridge",
-    "frontend",
-    "hass",
-    "hassio",
-    "gladysassistant"
+    "frontend"
   ],
   "type": "module",
   "main": "dist/module.js",
@@ -59,6 +48,7 @@
   "files": [
     "bin",
     "dist",
+    "apps/frontend/build",
     "npm-shrinkwrap.json",
     "CHANGELOG.md",
     "*.config.json",
@@ -81,6 +71,7 @@
     }
   },
   "scripts": {
+    "build:frontend": "npm --prefix apps/frontend run build",
     "start": "matterbridge",
     "add": "matterbridge --add .",
     "remove": "matterbridge --remove .",
@@ -100,8 +91,8 @@
     "test:watch": "vitest watch",
     "test:verbose": "vitest run --reporter verbose",
     "test:coverage": "vitest run --coverage --coverage.thresholds.statements=100 --coverage.thresholds.branches=100 --coverage.thresholds.lines=100 --coverage.thresholds.functions=100",
-    "lint": "oxlint",
-    "lint:fix": "oxlint --fix",
+    "lint": "oxlint --disable-nested-config",
+    "lint:fix": "oxlint --disable-nested-config --fix",
     "format": "oxfmt",
     "format:check": "oxfmt --check",
     "preversion": "npm run runMeBeforePublish",
@@ -133,7 +124,8 @@
   },
   "dependencies": {
     "node-ansi-logger": "3.3.1",
-    "node-persist-manager": "2.1.1"
+    "node-persist-manager": "2.1.1",
+    "open-tuya": "0.3.1"
   },
   "devDependencies": {
     "@types/node": "26.6.5",
