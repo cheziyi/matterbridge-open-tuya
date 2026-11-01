@@ -132,9 +132,9 @@ async function applyMeter(endpoint: MatterbridgeEndpoint, meter: NonNullable<Acc
 }
 
 /**
- * Write the charge of the battery to the main endpoint
+ * Write the charge of the battery to an endpoint that is a device in Matter
  *
- * @param {MatterbridgeEndpoint} endpoint The main endpoint.
+ * @param {MatterbridgeEndpoint} endpoint The endpoint.
  * @param {NonNullable<AccessoryLayout['battery']>} battery The battery.
  * @param {ControlValues} values The controls the device reports.
  * @returns {Promise<void>} Resolves when the charge and its level are written.
@@ -169,5 +169,8 @@ export async function applyValues(accessory: AccessoryEndpoints, layout: Accesso
     if (endpoint !== undefined) await applyUnit(endpoint, unit, values, changed);
   }
   if (layout.meter !== undefined) await applyMeter(accessory.endpoint, layout.meter, changed);
-  if (layout.battery !== undefined) await applyBattery(accessory.endpoint, layout.battery, changed);
+  if (layout.battery !== undefined) {
+    // A part of a composed device has no power source of its own: each device of its own has one.
+    for (const endpoint of [accessory.endpoint, ...(layout.isComposed ? [] : accessory.sideEndpoints.values())]) await applyBattery(endpoint, layout.battery, changed);
+  }
 }

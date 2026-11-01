@@ -3,7 +3,6 @@
     "name": "matterbridge-open-tuya",
     "type": "DynamicPlatform",
     "pollIntervalInSeconds": 30,
-    "devices": [],
     "debug": false,
     "unregisterOnShutdown": false
   },

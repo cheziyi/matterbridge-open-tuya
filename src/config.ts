@@ -118,15 +118,9 @@ export interface TuyaDeviceConfig extends TuyaDeviceExposure {
   localKey?: string;
 }
 
-/** The configuration of the platform as Matterbridge stores it: the account, the devices and the revision are written by the plugin itself, the poll interval in the config editor. */
+/** The configuration of the platform as Matterbridge stores it, which its config editor shows. The account and the devices hold secrets, and are kept in the storage of the platform instead: see `SetupStore`. */
 export type TuyaPlatformConfig = BasePlatformConfig & {
-  /** A `TuyaAccountConfig`, or what another version or an edit by hand left there: see `parseAccountConfig`. */
-  account?: object | string | number | boolean | null;
-  /** Each a `TuyaDeviceConfig`, or what another version or an edit by hand left there: see `parseDeviceConfigs`. */
-  devices?: unknown[];
   pollIntervalInSeconds?: number;
-  /** Counts the times the plugin itself stored the account or the devices: see `TuyaPlatform.onConfigChanged`. */
-  setupRevision?: number;
 };
 
 /** What a stored device without a setting falls back to. */

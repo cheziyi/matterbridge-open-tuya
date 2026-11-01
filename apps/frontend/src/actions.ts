@@ -22,7 +22,7 @@
  */
 
 import { api, type DataCenter, type QrLoginState, type SetupState, type StoredDevice } from './api.js';
-import { fitExposure, hasSameModel, pickExposure } from './drafts.js';
+import { draftFromStored, fitExposure, hasSameModel, pickExposure } from './drafts.js';
 import { render } from './render.js';
 import { currentDraft, type Draft, draftLabel, view } from './state.js';
 
@@ -328,6 +328,38 @@ export function startQueue(drafts: Draft[]): void {
 }
 
 /**
+ * Go straight to the options of a stored device, with the entry it is stored with
+ *
+ * The device is not checked first: its host can be changed while it does not answer, and it needs no account. Its
+ * entry stays as chosen, so that opening the options never replaces it or the features chosen from it.
+ *
+ * @param {StoredDevice} device The device, whose catalog entry this version has.
+ * @returns {void}
+ */
+export function openOptions(device: StoredDevice): void {
+  view.queue = [draftFromStored(device)];
+  view.saved = [];
+  view.handled = [];
+  view.error = '';
+  view.info = '';
+  view.screen = 'options';
+  render();
+}
+
+/**
+ * Give a stored device a new client, or start it again, and show how it went
+ *
+ * @param {StoredDevice} device The device.
+ * @returns {Promise<void>} Resolves when the page shows the outcome.
+ */
+export async function reconnectDevice(device: StoredDevice): Promise<void> {
+  const reply = await busy(`Reconnecting ${device.name}…`, async () => api('POST reconnect', { deviceId: device.deviceId }));
+  if (reply.ok) setSetup(reply.state);
+  else view.error = reply.error;
+  render();
+}
+
+/**
  * Go to the Connect step of the next device of the run, or to the end of the run
  *
  * @returns {Promise<void>} Resolves when the device is checked, or the end is shown.
@@ -368,7 +400,7 @@ export async function check(draft: Draft): Promise<void> {
     draft.features = result.features;
     draft.values = result.values;
     draft.productName = result.productName;
-    // A device now named by another entry has other features: the options are fitted to the ones it has.
+    // A device set up again because its entry is gone has other features: the options are fitted to the ones it has.
     const hadEntry = draft.catalogFile !== undefined || draft.model !== undefined;
     if (hadEntry && (draft.catalogFile !== result.catalogFile || !hasSameModel(draft.model, result.model))) Object.assign(draft, { hiddenFeatures: [], addedFeatures: [] });
     draft.catalogFile = result.catalogFile;

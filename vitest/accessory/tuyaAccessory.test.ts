@@ -497,10 +497,11 @@ describe('TuyaAccessory', () => {
       expect(accessory.endpoints).toHaveLength(3);
       const outlet2 = accessory.sideEndpoints.get('device.outlet2');
       const lock = accessory.sideEndpoints.get('device.childLock');
-      expect(outlet2?.serialNumber).toBe('bf0000000000000002aa-2');
+      // Made from the feature, not its place in the catalog entry: these values must never change, as the unique id is made from them.
+      expect(outlet2?.serialNumber).toBe('bf0000000000000002aa-98d677e2');
       expect(outlet2?.deviceName).toBe('Tuya bf0000000000000002aa Outlet 2');
       expect(labelOf(outlet2)).toBe('Strip Outlet 2');
-      expect(lock?.serialNumber).toBe('bf0000000000000002aa-6');
+      expect(lock?.serialNumber).toBe('bf0000000000000002aa-0c912d7c');
       expect(labelOf(lock)).toBe('Strip Child Lock');
       await addAccessory(accessory);
       await accessory.start();
@@ -521,6 +522,33 @@ describe('TuyaAccessory', () => {
     test('should write a new name to the label of every device of its own', async () => {
       await accessory.updateConfig(createDeviceConfig(stripFile, { name: 'Bench', isComposed: false }));
       expect(accessory.sideEndpoints.get('device.outlet2')?.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel')).toBe('Bench Outlet 2');
+      await accessory.dispose();
+    });
+  });
+
+  describe('a sensor on a battery, with a device of its own for each reading', () => {
+    test('should give each device its battery, and keep a long device ID within the 32 characters of a serial number', async () => {
+      const longId = 'bf00000000000000000000000000003a';
+      const client = createFakeClient({ device: { temperature: 21, humidityInPercent: 45, batteryInPercent: 15 } });
+      const accessory = new TuyaAccessory({
+        config: createDeviceConfig(multiSensorFile, { deviceId: longId, name: 'Hall', isComposed: false }),
+        entry: entryOf(multiSensorFile),
+        features: getDeviceFeatures(entryOf(multiSensorFile)),
+        productName: 'Motion sensor',
+        createConnection: (): DeviceConnection => connectionOf(client),
+        log,
+        vendorId,
+      });
+      const humidity = accessory.sideEndpoints.get('device.humidityInPercent');
+      const illuminance = accessory.sideEndpoints.get('device.illuminanceInLux');
+      expect(humidity?.serialNumber).toHaveLength(32);
+      expect(humidity?.serialNumber).not.toBe(illuminance?.serialNumber);
+      await addAccessory(accessory);
+      await accessory.start();
+      for (const endpoint of accessory.endpoints) {
+        expect(endpoint.getAttribute(PowerSource, 'batPercentRemaining')).toBe(30);
+        expect(endpoint.getAttribute(PowerSource, 'batChargeLevel')).toBe(PowerSource.BatChargeLevel.Warning);
+      }
       await accessory.dispose();
     });
   });

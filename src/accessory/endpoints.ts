@@ -21,6 +21,8 @@
  * limitations under the License.
  */
 
+import { createHash } from 'node:crypto';
+
 import {
   bridgedNode,
   contactSensor,
@@ -180,6 +182,37 @@ function getUnitKey(unit: LayoutUnit): string {
 }
 
 /**
+ * Get the serial number of a unit that is a device of its own, which never changes
+ *
+ * It is made from the component and the control of its feature, which neither a new release of the catalog nor the
+ * features shown change, and it is part of the unique id. Matter takes 32 characters: a device ID has up to 32 itself,
+ * so the feature is told apart by a hash of the whole.
+ *
+ * @param {string} serial The device ID.
+ * @param {LayoutUnit} unit The unit.
+ * @returns {string} The serial number, of at most 32 characters.
+ */
+function getUnitSerial(serial: string, unit: LayoutUnit): string {
+  const hash = createHash('sha256')
+    .update(`${serial}-${getUnitKey(unit)}`)
+    .digest('hex')
+    .slice(0, 8);
+  return `${serial.slice(0, maxDeviceNameLength - hash.length - 1)}-${hash}`;
+}
+
+/**
+ * Add the power source of a device: its battery when it runs on one, wired otherwise
+ *
+ * @param {MatterbridgeEndpoint} endpoint The endpoint, a device in Matter.
+ * @param {AccessoryLayout} layout How the features of the device are laid out.
+ * @returns {void}
+ */
+function addPowerSource(endpoint: MatterbridgeEndpoint, layout: AccessoryLayout): void {
+  if (layout.battery === undefined) endpoint.createDefaultPowerSourceWiredClusterServer();
+  else endpoint.createDefaultPowerSourceBatteryClusterServer(null, PowerSource.BatChargeLevel.Ok, null);
+}
+
+/**
  * Add the clusters of the device type of a unit
  *
  * Every sensor shows no reading until the first read: a contact sensor shows closed, a water leak detector no leak and
@@ -226,8 +259,7 @@ export function createMainEndpoint(identity: EndpointIdentity, layout: Accessory
     identity.vendorId,
     identity.productName,
   );
-  if (layout.battery === undefined) endpoint.createDefaultPowerSourceWiredClusterServer();
-  else endpoint.createDefaultPowerSourceBatteryClusterServer(null, PowerSource.BatChargeLevel.Ok, null);
+  addPowerSource(endpoint, layout);
   setInitialLabel(endpoint, identity);
   addUnitClusters(endpoint, layout.main);
   if (layout.meter !== undefined) {
@@ -242,19 +274,21 @@ export function createMainEndpoint(identity: EndpointIdentity, layout: Accessory
  *
  * @param {EndpointIdentity} identity The device the endpoint belongs to.
  * @param {LayoutUnit} unit What the endpoint shows.
+ * @param {AccessoryLayout} layout How the features of the device are laid out.
  * @returns {MatterbridgeEndpoint} The endpoint.
  */
-function createExtraEndpoint(identity: EndpointIdentity, unit: LayoutUnit): MatterbridgeEndpoint {
+function createExtraEndpoint(identity: EndpointIdentity, unit: LayoutUnit, layout: AccessoryLayout): MatterbridgeEndpoint {
   const { label } = unit.feature;
   const endpoint = createBasicInformation(
     new MatterbridgeEndpoint([getDeviceType(unit), bridgedNode, powerSource], {
       id: identity.ids.resolve(`${identity.serial}-${getUnitKey(unit)}`),
     }).createDefaultIdentifyClusterServer(),
     `${getDeviceName(identity.serial)} ${label}`,
-    `${identity.serial}-${unit.code}`.slice(0, maxDeviceNameLength),
+    getUnitSerial(identity.serial, unit),
     identity.vendorId,
     `${vendorName} ${label}`,
-  ).createDefaultPowerSourceWiredClusterServer();
+  );
+  addPowerSource(endpoint, layout);
   return setInitialLabel(endpoint, identity, label);
 }
 
@@ -284,14 +318,15 @@ function getNumberTag(main: MatterbridgeEndpoint, deviceType: DeviceTypeDefiniti
  *
  * @param {EndpointIdentity} identity The device the endpoint belongs to.
  * @param {LayoutUnit} unit What the endpoint shows.
+ * @param {AccessoryLayout} layout How the features of the device are laid out.
  * @param {MatterbridgeEndpoint} [main] The main endpoint the endpoint is a part of. Left out, the endpoint is a device of its own.
  * @returns {MatterbridgeEndpoint} The endpoint, with its clusters and nothing subscribed yet.
  */
-export function createSideEndpoint(identity: EndpointIdentity, unit: LayoutUnit, main?: MatterbridgeEndpoint): MatterbridgeEndpoint {
+export function createSideEndpoint(identity: EndpointIdentity, unit: LayoutUnit, layout: AccessoryLayout, main?: MatterbridgeEndpoint): MatterbridgeEndpoint {
   const deviceType = getDeviceType(unit);
   const endpoint =
     main === undefined
-      ? createExtraEndpoint(identity, unit)
+      ? createExtraEndpoint(identity, unit, layout)
       : main
           .addChildDeviceType(identity.ids.resolve(getUnitKey(unit)), deviceType, { tagList: [getNumberTag(main, deviceType, unit.feature.label)] })
           .createDefaultIdentifyClusterServer();

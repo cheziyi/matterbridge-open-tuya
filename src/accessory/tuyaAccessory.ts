@@ -179,7 +179,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
     this.subscribeUnit(this.endpoint, layout.main);
     if (layout.isComposed) this.parent = this.endpoint;
     for (const unit of layout.sides) {
-      const endpoint = createSideEndpoint(this.identity, unit, this.parent);
+      const endpoint = createSideEndpoint(this.identity, unit, layout, this.parent);
       this.subscribeUnit(endpoint, unit);
       this.sideEndpoints.set(unit.feature.id, endpoint);
     }

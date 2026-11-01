@@ -21,7 +21,7 @@
  * limitations under the License.
  */
 
-import { loadState, removeDevice, search, signOut, startQueue, startSignIn } from '../actions.js';
+import { loadState, openOptions, reconnectDevice, removeDevice, search, signOut, startQueue, startSignIn } from '../actions.js';
 import { dataCenterNames, meterFeatureId, type StoredDevice } from '../api.js';
 import { button, notice } from '../components.js';
 import { type Child, h } from '../dom.js';
@@ -105,8 +105,11 @@ function deviceRow(device: StoredDevice): HTMLElement {
       : h(
           'div',
           { class: 'actions' },
-          // Either way the device is checked first, so the options offered are the ones it has today.
-          button(device.status === 'online' ? 'Options' : 'Reconnect', () => startQueue([draftFromStored(device)]), 'quiet', view.setup?.account === undefined),
+          // A device whose entry this version no longer has is checked again to find one, which takes an account.
+          device.features === undefined
+            ? button('Set up again', () => startQueue([draftFromStored(device)]), 'quiet', view.setup?.account === undefined)
+            : button('Options', () => openOptions(device), 'quiet'),
+          device.features !== undefined && (device.status === 'offline' || device.status === 'stopped') ? button('Reconnect', () => void reconnectDevice(device), 'quiet') : null,
           button('Remove', () => {
             view.confirmingRemoval = device.deviceId;
             render();

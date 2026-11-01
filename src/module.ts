@@ -61,7 +61,7 @@ import { findDeviceEntry, getDeviceFeatures, getProductName } from './features.j
 import { AddressStore, type LanAddress } from './platform/addressStore.js';
 import { CloudRoute } from './platform/cloudRoute.js';
 import { EndpointIds, EndpointIdStore } from './platform/endpointIds.js';
-import { parseSetupRevision, SetupRevisions } from './platform/setupRevisions.js';
+import { SetupStore } from './platform/setupStore.js';
 import { findGateway, getDeviceSupport, probeDevice, type ProbeResult, probeThrough } from './setup/probe.js';
 import {
   type DeveloperSignInRequest,
@@ -151,13 +151,16 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private cloud: TuyaCloudAccount | undefined;
   /** Whether the cloud refused the account's session, so that it has to be signed in again. */
   private isAccountRejected = false;
-  private devices: TuyaDeviceConfig[];
+  private devices: TuyaDeviceConfig[] = [];
   /** The stored devices this version cannot read, which are stored again as they are. */
-  private unreadableDevices: unknown[];
+  private unreadableDevices: unknown[] = [];
   /** The running devices, by their device ID. */
   private readonly accessories = new Map<string, TuyaAccessory>();
   private readonly addressStore = new AddressStore(() => this.context);
   private readonly endpointIdStore = new EndpointIdStore(() => this.context);
+  private readonly setupStore = new SetupStore(() => this.context);
+  /** The first read of the stored account and devices, which both the start and the setup page wait for. */
+  private setupLoad: Promise<void> | undefined;
   /** Why a stored device is not running, by its device ID. */
   private readonly startErrors = new Map<string, string>();
   /** The devices whose stored options reach Matter at the next start of Matterbridge, by their device ID. */
@@ -180,7 +183,6 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private pollTimer: NodeJS.Timeout | undefined;
   private syncTimer: NodeJS.Timeout | undefined;
   private pollIntervalInSeconds: number;
-  private readonly revisions: SetupRevisions;
   /** The devices being read, so that a device that is slow to answer holds up no other. */
   private readonly polling = new Set<TuyaAccessory>();
   // Changes to the account and the device list run one after the other.
@@ -200,11 +202,6 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     }
 
     this.log.info(`Initializing platform ${this.config.name}...`);
-    this.account = parseAccountConfig(config.account);
-    if (config.account !== undefined && this.account === undefined) this.log.warn('The stored Tuya account cannot be read: sign in again in the setup page');
-    this.devices = parseDeviceConfigs(config.devices, (message) => this.log.warn(message));
-    this.unreadableDevices = getUnreadableDevices(config.devices, this.devices);
-    this.revisions = new SetupRevisions(config.setupRevision);
     this.pollIntervalInSeconds = normalizePollInterval(config.pollIntervalInSeconds);
     this.log.info(`Platform ${this.config.name} initialized successfully`);
   }
@@ -213,8 +210,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     this.log.info(`Starting platform ${this.config.name} with reason: ${reason ?? 'no reason provided'}...`);
     this.isStopping = false;
 
-    // Wait for the platform storage, which holds the address each device was heard at.
-    await this.ready;
+    await this.loadSetup();
 
     if (this.account !== undefined) this.cloud = this.createCloud(this.account);
     await this.startDiscovery();
@@ -262,6 +258,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     this.discovery = undefined;
     await this.cloud?.close().catch(ignoreFailure);
     this.cloud = undefined;
+    // A session refreshed until now is stored before Matterbridge closes the storage.
+    await this.setupStore.flush();
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
 
     this.log.info(`Platform ${this.config.name} shut down successfully`);
@@ -270,12 +268,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Apply a configuration saved in the Matterbridge config editor
    *
-   * The editor changes the poll interval. The account and the devices are set up in the setup page alone, and the
-   * editor does not list them.
-   *
-   * The editor still holds the whole configuration it loaded with its page, and sends all of it back. Saved after the
-   * setup page changed the account or the devices meanwhile, that copy holds those of before: it is recognized by its
-   * revision, and the account and the devices are stored again as they are.
+   * The editor changes the poll interval. The account and the devices are set up in the setup page alone, and are kept
+   * in the storage of the platform: see `SetupStore`.
    *
    * @param {PlatformConfig} config The saved configuration.
    * @returns {Promise<void>} Resolves when the configuration is applied.
@@ -283,15 +277,11 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   // oxlint-disable-next-line typescript/require-await
   override async onConfigChanged(config: PlatformConfig): Promise<void> {
     if (this.pollTimer === undefined) return;
-    // A configuration this plugin stored itself comes back here within moments, with nothing in it to apply.
-    const revision = parseSetupRevision(config.setupRevision);
-    if (this.revisions.acknowledge(revision)) return;
     const pollIntervalInSeconds = normalizePollInterval(config.pollIntervalInSeconds);
     if (pollIntervalInSeconds !== this.pollIntervalInSeconds) {
       this.pollIntervalInSeconds = pollIntervalInSeconds;
       this.startTimers();
     }
-    if (revision !== this.revisions.current) this.storeConfig();
   }
 
   /**
@@ -304,6 +294,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * @returns {Promise<unknown>} The JSON reply, or undefined for a path the plugin does not serve.
    */
   override async onFetch(method: string, path?: string, _query?: Record<string, unknown>, body?: unknown): Promise<unknown> {
+    // Matterbridge answers a failure here with an error: the page must not take a read that failed for an empty setup.
+    await this.loadSetup();
     return handleSetupRequest(this, method, path, body);
   }
 
@@ -349,17 +341,21 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    */
   async startQrLogin(userCode: string): Promise<QrLoginState> {
     this.cancelQrLogin();
+    // In place before the wait for the QR code: a cancel, a shutdown or another sign in meanwhile stops this one.
+    const abort = new AbortController();
+    this.qrAbort = abort;
     const login = createQrLogin({ clientId: smartLifeClientId, schema: smartLifeSchema, userCode });
     let qrCode: string;
     try {
       qrCode = await login.requestQrCode();
     } catch (error) {
+      if (this.qrAbort !== abort) return this.qrLogin;
+      this.qrAbort = undefined;
       const message = `The Smart Life cloud did not give a QR code: check the User Code. ${describeError(error)}`;
       this.log.warn(message);
       throw new Error(message, { cause: error });
     }
-    const abort = new AbortController();
-    this.qrAbort = abort;
+    if (this.qrAbort !== abort) return this.qrLogin;
     const timer = setTimeout(() => abort.abort(new TuyaError('QR_CODE_EXPIRED', 'The QR code was not scanned in time')), qrLoginTimeoutInMs);
     timer.unref();
     this.qrLogin = { status: 'waiting', qrCode };
@@ -430,7 +426,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       this.account = undefined;
       this.isAccountRejected = false;
       this.listed = new Map();
-      this.storeConfig();
+      await this.storeSetup();
       await this.reconnectAll();
     });
     this.log.notice('Signed out of the Tuya account');
@@ -598,6 +594,24 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   }
 
   /**
+   * Give a stored device a new client and read it through that, or start it again when it could not start
+   *
+   * @param {string} deviceId The device ID.
+   * @returns {Promise<boolean>} False when no device has that device ID.
+   */
+  async reconnectDevice(deviceId: string): Promise<boolean> {
+    let isFound = false;
+    await this.enqueueChange(async () => {
+      const device = this.devices.find((candidate) => candidate.deviceId === deviceId);
+      if (device === undefined) return;
+      isFound = true;
+      const accessory = this.accessories.get(deviceId);
+      await (accessory === undefined ? this.startDevice(device) : this.reconnect(device, accessory));
+    });
+    return isFound;
+  }
+
+  /**
    * Read the controls of every running device once
    *
    * A device that has not answered the read before this one is left out, so that the others are still read on time.
@@ -623,7 +637,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * Note where the discovery heard a device on the LAN
    *
    * A device broadcasts every few seconds, so this is called again and again with the same address: only a new address
-   * is stored. A running device that has no route on the LAN yet, or whose gateway was heard, gets one.
+   * is stored. A running device that has no route on the LAN yet, or whose gateway was heard, gets one. So does one
+   * heard with a new protocol version, such as after an update of its firmware, unless a host and a version were given
+   * for it: a client speaks the version it was built with.
    *
    * @param {DiscoveredTuyaDevice} found The device as it broadcast itself.
    * @returns {Promise<void>} Resolves when the address is stored and the devices it reaches are reconnected.
@@ -632,18 +648,21 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     const known = this.addresses.get(found.deviceId);
     if (known?.host === found.host && known.version === found.version) return;
     const address: LanAddress = { host: found.host, version: found.version };
+    const hasNewVersion = known !== undefined && known.version !== found.version;
     this.addresses.set(found.deviceId, address);
     if (!this.listLanIds().includes(found.deviceId)) return;
     this.log.debug(`Heard ${found.deviceId} on the LAN at ${found.host}, protocol ${found.version}`);
     try {
       await this.addressStore.write(found.deviceId, address);
-      // The discovery follows a device that has a route on the LAN to its new address: only one without a route yet needs a new client.
+      // The discovery follows a device that has a route on the LAN to its new address: only one without a route yet, or that speaks another version now, needs a new client.
       await this.enqueueChange(async () => {
         const reconnecting: Promise<void>[] = [];
         for (const device of this.devices) {
           if (device.deviceId !== found.deviceId && device.gatewayId !== found.deviceId) continue;
           const accessory = this.accessories.get(device.deviceId);
-          if (accessory !== undefined && !accessory.getStatus().hasLan && device.isCloudOnly !== true) reconnecting.push(this.reconnect(device, accessory));
+          if (accessory === undefined || device.isCloudOnly === true) continue;
+          const isGiven = device.gatewayId === found.deviceId ? findGivenGatewayAddress(this.devices, found.deviceId) !== undefined : device.host !== undefined;
+          if (!accessory.getStatus().hasLan || (hasNewVersion && !isGiven)) reconnecting.push(this.reconnect(device, accessory));
         }
         await Promise.all(reconnecting);
       });
@@ -714,7 +733,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     if (this.account !== account || account.type !== 'smartLife') return;
     account.session = session;
     this.isAccountRejected = false;
-    this.storeConfig();
+    this.storeSetup().catch((error: unknown) => this.log.error(`The new session of the Tuya account could not be stored: ${getErrorMessage(error)}`));
   }
 
   /**
@@ -733,7 +752,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
         this.cloud = cloud;
         this.isAccountRejected = false;
         this.listed = new Map(listing?.map((device) => [device.deviceId, device]));
-        this.storeConfig();
+        await this.storeSetup();
         await this.reconnectAll();
       });
     } catch (error) {
@@ -802,12 +821,20 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Read what the cloud lists of a device as the fields of a stored device
    *
+   * The node and the gateway are always there, undefined for a device the cloud does not place behind a gateway: merged
+   * over a stored device, they take away a gateway it no longer is behind. A local key the cloud withholds stays as stored.
+   *
    * @param {TuyaCloudDevice} device The device as the cloud lists it.
    * @returns {Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'>} The fields the cloud gives.
    */
   private fromListing(device: TuyaCloudDevice): Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'> {
     const gateway = findGateway(device, [...this.listed.values()]);
-    const fields: Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'> = { productKey: device.productKey, cloudName: device.name };
+    const fields: Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'> = {
+      productKey: device.productKey,
+      cloudName: device.name,
+      nodeId: undefined,
+      gatewayId: undefined,
+    };
     if (device.category !== '') fields.category = device.category;
     if (device.localKey !== undefined) fields.localKey = device.localKey;
     if (device.nodeId !== undefined && gateway !== undefined) {
@@ -864,7 +891,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * has a new local key: its client is built again with it, and the one built with the old key, which reaches nothing
    * any more, is closed. A host given for a device behind the gateway is where the gateway is reached, as a host given
    * for any other device: a new one builds the client again in the same way, and so does taking it away, once the
-   * gateway was heard elsewhere. A client built from what was heard follows the gateway by itself.
+   * gateway was heard elsewhere. A client built from what was heard follows the gateway to a new host by itself, but
+   * keeps the protocol version it was built with: a new version builds it again too.
    *
    * Closing a client ends the routes of every device behind it: whoever changes the address reconnects them all.
    *
@@ -875,8 +903,10 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private getGateway(gatewayId: string, localKey: string): LocalTuyaClient | undefined {
     const known = this.gateways.get(gatewayId);
     const given = findGivenGatewayAddress(this.devices, gatewayId);
-    if (known?.localKey === localKey && given === undefined && !known.isGiven) return known.client;
-    const address = given ?? this.addresses.get(gatewayId) ?? known?.address;
+    const heard = this.addresses.get(gatewayId);
+    const hasNewVersion = known !== undefined && heard !== undefined && heard.version !== known.address.version;
+    if (known?.localKey === localKey && given === undefined && !known.isGiven && !hasNewVersion) return known.client;
+    const address = given ?? heard ?? known?.address;
     if (address === undefined) return undefined;
     if (known?.localKey === localKey && isSameAddress(address, known.address)) {
       known.isGiven = given !== undefined;
@@ -957,14 +987,26 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     };
   }
 
-  // Stores the account and the devices, under a new revision.
-  private storeConfig(): void {
-    this.config.setupRevision = this.revisions.advance();
-    this.config.account = this.account;
+  // Reads the stored account and devices once.
+  private async loadSetup(): Promise<void> {
+    this.setupLoad ??= this.readSetup();
+    return this.setupLoad;
+  }
+
+  private async readSetup(): Promise<void> {
+    // The platform storage is not there until the platform is ready.
+    await this.ready;
+    const stored = await this.setupStore.read();
+    this.account = parseAccountConfig(stored.account);
+    if (stored.account !== undefined && this.account === undefined) this.log.warn('The stored Tuya account cannot be read: sign in again in the setup page');
+    this.devices = parseDeviceConfigs(stored.devices, (message) => this.log.warn(message));
+    this.unreadableDevices = getUnreadableDevices(stored.devices, this.devices);
+  }
+
+  private async storeSetup(): Promise<void> {
     // A device this version cannot read stays stored, until one with its name or its device ID takes its place.
     this.unreadableDevices = getUnreadableDevices(this.unreadableDevices, this.devices);
-    this.config.devices = [...this.devices, ...this.unreadableDevices];
-    this.saveConfig(this.config);
+    await this.setupStore.write({ account: this.account, devices: [...this.devices, ...this.unreadableDevices] });
   }
 
   /**
@@ -977,7 +1019,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private async reconcile(devices: TuyaDeviceConfig[]): Promise<void> {
     const previous = this.devices;
     this.devices = devices;
-    this.storeConfig();
+    await this.storeSetup();
     for (const device of previous) {
       if (!this.devices.some((candidate) => candidate.deviceId === device.deviceId)) await this.stopDevice(device);
     }

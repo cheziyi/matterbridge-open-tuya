@@ -123,6 +123,8 @@ export interface SetupReplies {
   'POST probe': { result: ProbeResult };
   'POST device': { state: SetupState };
   'POST remove-device': object;
+  /** The state once the device was given a new client and read through it. */
+  'POST reconnect': { state: SetupState };
 }
 
 /** Every reply says whether the request worked, so the page never has to read an HTTP status. */
@@ -141,6 +143,7 @@ export interface SetupPlatform {
   probe: (deviceId: string) => Promise<ProbeResult>;
   saveDevice: (device: TuyaDeviceConfig) => Promise<void>;
   removeDevice: (deviceId: string) => Promise<boolean>;
+  reconnectDevice: (deviceId: string) => Promise<boolean>;
 }
 
 // The User Code of the app: letters and digits, case-sensitive.
@@ -232,6 +235,11 @@ async function handlePost(platform: SetupPlatform, path: string, body: Record<st
     if (!isValidDeviceId(deviceId)) return fail('Give the device ID of the device to remove');
     return (await platform.removeDevice(deviceId)) ? { ok: true } : fail(`No device has the device ID ${deviceId}`);
   }
+  if (path === 'reconnect') {
+    const { deviceId } = body;
+    if (!isValidDeviceId(deviceId)) return fail('Give the device ID of the device to reconnect');
+    return (await platform.reconnectDevice(deviceId)) ? { ok: true, state: await platform.getSetupState() } : fail(`No device has the device ID ${deviceId}`);
+  }
   return undefined;
 }
 
@@ -239,7 +247,7 @@ async function handlePost(platform: SetupPlatform, path: string, body: Record<st
  * Serve one request of the setup page
  *
  * Paths: `GET state`, `POST qr-code`, `GET qr-login`, `POST cancel-qr-code`, `POST developer-login`, `POST sign-out`,
- * `POST devices`, `POST sync`, `POST probe`, `POST device` and `POST remove-device`. The session of an account, the
+ * `POST devices`, `POST sync`, `POST probe`, `POST device`, `POST remove-device` and `POST reconnect`. The session of an account, the
  * secret of a cloud project and the local key of a device are never returned.
  *
  * Edge cases:

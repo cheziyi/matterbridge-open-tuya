@@ -116,9 +116,9 @@ The setup page shows whether each device is online on your network or through th
 
 ## How devices are stored
 
-The plugin stores the account and the devices in its own configuration, which Matterbridge keeps in its storage. The account is the session of the Smart Life sign in, which the plugin refreshes and stores again as the cloud asks, or the Access ID, the Access Secret and the data center of a cloud project. Each device is stored with its device ID, its product key, the catalog entry its controls are named by, or the Tuya cloud's model of it with its category, its local key and its options. A device stored with its model starts without the cloud. The setup page never sees the session, the secret or a local key.
+The plugin stores the account and the devices in its own storage, apart from the configuration Matterbridge's config editor shows, so that no secret reaches that editor. The account is the session of the Smart Life sign in, which the plugin refreshes and stores again as the cloud asks, or the Access ID, the Access Secret and the data center of a cloud project. Each device is stored with its device ID, its product key, the catalog entry its controls are named by, or the Tuya cloud's model of it with its category, its local key and its options. A device stored with its model starts without the cloud. The setup page never sees the session, the secret or a local key.
 
-A device stored by this version stays as it is when the plugin is updated: a setting added later falls back to what the plugin did before it existed. A device the plugin cannot read, such as one edited by hand, is kept in the configuration as it is, and logged.
+A device stored by this version stays as it is when the plugin is updated: a setting added later falls back to what the plugin did before it existed. A device the plugin cannot read, such as one edited by hand, is kept in the storage as it is, and logged.
 
 ## Configuration
 
@@ -160,7 +160,7 @@ The plugin's source is in [src](./src), and its tests follow the same layout und
 | [mapping.ts](./src/mapping.ts)   | The conversions between the values of a device and the Matter clusters.                                                                        |
 | [errors.ts](./src/errors.ts)     | The helpers that describe errors.                                                                                                              |
 | [accessory/](./src/accessory)    | One device in Matter: its layout, its endpoints, what the controllers ask of it and what the device reports.                                   |
-| [platform/](./src/platform)      | What the platform keeps between restarts, its own saves, and the route to a device through the cloud.                                          |
+| [platform/](./src/platform)      | What the platform keeps between restarts, and the route to a device through the cloud.                                                         |
 | [setup/](./src/setup)            | The guided setup: the checks of a device and the REST API of the setup page.                                                                   |
 
 The setup page is a small TypeScript page without a framework, in [apps/frontend](./apps/frontend), which esbuild bundles into one `app.js`. Matterbridge serves `apps/frontend/build` at `/plugins/matterbridge-open-tuya/`, and the page calls the plugin through `onFetch`: see [src/setup/setupApi.ts](./src/setup/setupApi.ts). The page takes the types of what the plugin sends from the plugin itself, through a TypeScript project reference to the plugin's build, which is why the plugin is built first.

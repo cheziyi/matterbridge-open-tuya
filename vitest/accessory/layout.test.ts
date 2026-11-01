@@ -10,9 +10,9 @@ import { getDeviceFeatures } from '../../src/features.js';
 import { entryOf, multiSensorFile, plugFile, stripFile } from '../fakeTuya.js';
 
 describe('getAccessoryLayout', () => {
-  test('should make the first outlet the device, with its meter, and code every feature by its place', () => {
+  test('should make the first outlet the device, with its meter', () => {
     const layout = getAccessoryLayout(defaultExposure, getDeviceFeatures(entryOf(plugFile)));
-    expect(layout?.main).toMatchObject({ type: 'outlet', code: '1', feature: { id: 'device.on' } });
+    expect(layout?.main).toMatchObject({ type: 'outlet', feature: { id: 'device.on' } });
     expect(layout?.sides).toEqual([]);
     expect(layout?.meter?.power?.unit).toBe('W');
     expect(layout?.isComposed).toBe(true);
@@ -26,12 +26,7 @@ describe('getAccessoryLayout', () => {
     );
     // The first outlet is the device, whatever is hidden.
     expect(layout?.main.feature.id).toBe('device.outlet1');
-    expect(layout?.sides.map((unit) => [unit.feature.id, unit.code])).toEqual([
-      ['device.outlet2', '2'],
-      ['device.outlet4', '4'],
-      ['device.outlet5', '5'],
-      ['device.childLock', '6'],
-    ]);
+    expect(layout?.sides.map((unit) => unit.feature.id)).toEqual(['device.outlet2', 'device.outlet4', 'device.outlet5', 'device.childLock']);
     expect(layout === undefined ? [] : [layout.main, ...layout.sides]).toHaveLength(5);
     expect(getAccessoryLayout({ ...defaultExposure, hiddenFeatures: ['meter'] }, getDeviceFeatures(entryOf(plugFile)))?.meter).toBeUndefined();
   });

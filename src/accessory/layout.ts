@@ -25,10 +25,7 @@ import { meterFeatureId, type TuyaDeviceExposure } from '../config.js';
 import type { ControlRef, DeviceFeatures, MeterFeature, SensorFeature, SwitchFeature } from '../features.js';
 
 /** One endpoint of a device: an outlet, a sensor, or a setting switch. */
-export type LayoutUnit =
-  | { type: 'outlet'; feature: SwitchFeature; code: string }
-  | { type: 'setting'; feature: SwitchFeature; code: string }
-  | { type: 'sensor'; feature: SensorFeature; code: string };
+export type LayoutUnit = { type: 'outlet'; feature: SwitchFeature } | { type: 'setting'; feature: SwitchFeature } | { type: 'sensor'; feature: SensorFeature };
 
 /** How the features of a device are laid out on its Matter endpoints. */
 export interface AccessoryLayout {
@@ -38,7 +35,7 @@ export interface AccessoryLayout {
   sides: LayoutUnit[];
   /** The meter of the main outlet, when it is shown. */
   meter?: MeterFeature;
-  /** The charge of the battery of the device, on the main endpoint. */
+  /** The charge of the battery of the device, on each endpoint that is a device in Matter. */
   battery?: ControlRef;
   /** Whether the sides are parts of the main endpoint, instead of devices of their own. */
   isComposed: boolean;
@@ -46,9 +43,6 @@ export interface AccessoryLayout {
 
 /**
  * Lay out the features of a device on its Matter endpoints
- *
- * Each feature has a code that tells its endpoint apart in its serial number: its place among the features of the
- * device, so that it stays the same whichever features are shown.
  *
  * Edge cases:
  *  - a device with neither an outlet nor a sensor -> undefined: it has nothing to show
@@ -62,10 +56,10 @@ export interface AccessoryLayout {
  */
 export function getAccessoryLayout(exposure: TuyaDeviceExposure, features: DeviceFeatures): AccessoryLayout | undefined {
   const units: LayoutUnit[] = [
-    ...features.outlets.map((feature): LayoutUnit => ({ type: 'outlet', feature, code: '' })),
-    ...features.sensors.map((feature): LayoutUnit => ({ type: 'sensor', feature, code: '' })),
-    ...features.settingSwitches.map((feature): LayoutUnit => ({ type: 'setting', feature, code: '' })),
-  ].map((unit, index) => ({ ...unit, code: String(index + 1) }));
+    ...features.outlets.map((feature): LayoutUnit => ({ type: 'outlet', feature })),
+    ...features.sensors.map((feature): LayoutUnit => ({ type: 'sensor', feature })),
+    ...features.settingSwitches.map((feature): LayoutUnit => ({ type: 'setting', feature })),
+  ];
   const [main, ...rest] = units;
   if (main === undefined || main.type === 'setting') return undefined;
   const isShown = (unit: LayoutUnit): boolean => (unit.type === 'setting' ? exposure.addedFeatures.includes(unit.feature.id) : !exposure.hiddenFeatures.includes(unit.feature.id));

@@ -51,7 +51,7 @@ node scripts/run-chip-tests.mjs --stop
 
 The cluster tests need a device the container can reach: one of a Tuya account, on the network of the Docker host or through the Tuya cloud. The account is stored as the session or the cloud project the plugin signs in with, so sign in inside the container instead of writing the account into `chipTests.json`:
 
-1. Start the container, open the Matterbridge frontend it serves at `http://localhost:8585` and open the setup page of the plugin from its row. Sign in and add the device, with the options to test. The plugin stores the account and the device in the configuration of the container, which `--start` writes over: add them again after each `--start`.
+1. Start the container, open the Matterbridge frontend it serves at `http://localhost:8585` and open the setup page of the plugin from its row. Sign in and add the device, with the options to test. The plugin stores the account and the device in its own storage in the container, which `--start` does not write over: they are gone only with the container.
 2. Read the endpoint numbers with the wildcard read of section 4 of the harness guide rather than counting: Matter numbers the endpoints in the order they are registered and keeps the numbers in the node storage afterwards. The plugin registers the main endpoint of a device first, then its other outlets, its other sensors and its setting switches, in the order of the catalog: see `getAccessoryLayout` in [src/accessory/layout.ts](./src/accessory/layout.ts). A composed device has those as child endpoints of the main one.
 3. Add the tests to `chipTests.json` with `--endpoint` set accordingly, and a `chip:test:<cluster>` script to `package.json` for each cluster.
 

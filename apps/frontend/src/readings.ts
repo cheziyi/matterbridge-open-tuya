@@ -29,9 +29,19 @@ function read(values: Values, ref: ControlRef): boolean | number | string | unde
   return values[ref.component]?.[ref.control];
 }
 
+// The unit the device reports, on a device that switches it, or the one the catalog gives: as the plugin reads it for Matter.
+function temperatureUnit(values: Values, feature: SensorFeature): string | undefined {
+  if (feature.unitFrom === undefined) return feature.unit;
+  const unit = read(values, { component: feature.component, control: feature.unitFrom });
+  return typeof unit === 'string' ? unit : feature.unit;
+}
+
 // Such as "21.5 °C" or "Open".
-function describeSensor(feature: SensorFeature, value: boolean | number | string): string {
-  if (feature.kind === 'temperature') return `${String(value)} °${feature.unit !== undefined && /^f/i.test(feature.unit) ? 'F' : 'C'}`;
+function describeSensor(feature: SensorFeature, value: boolean | number | string, values: Values): string {
+  if (feature.kind === 'temperature') {
+    const unit = temperatureUnit(values, feature);
+    return `${String(value)} °${unit !== undefined && /^f/i.test(unit) ? 'F' : 'C'}`;
+  }
   if (feature.kind === 'humidity') return `${String(value)} % humidity`;
   if (feature.kind === 'illuminance') return `${String(value)} lx`;
   const isDetected = value === true || value === 1 || value === 'true';
@@ -57,7 +67,7 @@ export function describeReadings(features: DeviceFeatures | undefined, values: V
   }
   for (const sensor of features.sensors) {
     const value = read(values, sensor);
-    if (value !== undefined) parts.push(describeSensor(sensor, value));
+    if (value !== undefined) parts.push(describeSensor(sensor, value, values));
   }
   const { meter } = features;
   for (const reading of [meter?.power, meter?.voltage, meter?.current, meter?.energy]) {

@@ -29,6 +29,7 @@ function createPlatform(): { [K in keyof SetupPlatform]: Mock<SetupPlatform[K]> 
     probe: vi.fn(async (deviceId: string) => Promise.resolve({ status: 'ready' as const, deviceId })),
     saveDevice: vi.fn(async () => Promise.resolve()),
     removeDevice: vi.fn(async (deviceId: string) => Promise.resolve(deviceId === 'bf0000000000000001aa')),
+    reconnectDevice: vi.fn(async (deviceId: string) => Promise.resolve(deviceId === 'bf0000000000000001aa')),
   };
 }
 
@@ -115,6 +116,16 @@ describe('handleSetupRequest', () => {
     expect(await handleSetupRequest(platform, 'POST', 'remove-device', {})).toEqual({ ok: false, error: 'Give the device ID of the device to remove' });
     platform.removeDevice.mockRejectedValueOnce(new Error('disk full'));
     expect(await handleSetupRequest(platform, 'POST', 'remove-device', { deviceId: 'bf0000000000000001aa' })).toEqual({ ok: false, error: 'disk full' });
+  });
+
+  test('should reconnect a device by its device ID, and say when it cannot', async () => {
+    const platform = createPlatform();
+    expect(await handleSetupRequest(platform, 'POST', 'reconnect', { deviceId: 'bf0000000000000001aa' })).toEqual({ ok: true, state });
+    expect(await handleSetupRequest(platform, 'POST', 'reconnect', { deviceId: 'bf0000000000000002aa' })).toEqual({
+      ok: false,
+      error: 'No device has the device ID bf0000000000000002aa',
+    });
+    expect(await handleSetupRequest(platform, 'POST', 'reconnect', {})).toEqual({ ok: false, error: 'Give the device ID of the device to reconnect' });
   });
 
   test('should answer undefined for a path it does not serve, and the error of a call that fails', async () => {
