@@ -22,7 +22,7 @@
  */
 
 import { api, type DataCenter, type QrLoginState, type SetupState, type StoredDevice } from './api.js';
-import { fitExposure, pickExposure } from './drafts.js';
+import { fitExposure, hasSameModel, pickExposure } from './drafts.js';
 import { render } from './render.js';
 import { currentDraft, type Draft, draftLabel, view } from './state.js';
 
@@ -370,8 +370,7 @@ export async function check(draft: Draft): Promise<void> {
     draft.productName = result.productName;
     // A device now named by another entry has other features: the options are fitted to the ones it has.
     const hadEntry = draft.catalogFile !== undefined || draft.model !== undefined;
-    if (hadEntry && (draft.catalogFile !== result.catalogFile || JSON.stringify(draft.model) !== JSON.stringify(result.model)))
-      Object.assign(draft, { hiddenFeatures: [], addedFeatures: [] });
+    if (hadEntry && (draft.catalogFile !== result.catalogFile || !hasSameModel(draft.model, result.model))) Object.assign(draft, { hiddenFeatures: [], addedFeatures: [] });
     draft.catalogFile = result.catalogFile;
     draft.model = result.model;
     Object.assign(draft, fitExposure(pickExposure(draft), result.features));

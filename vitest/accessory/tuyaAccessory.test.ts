@@ -187,6 +187,46 @@ describe('TuyaAccessory', () => {
       expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true);
     });
 
+    test('should show what the device last reported when it neither takes a write nor answers the read after it', async () => {
+      client.writeControls.mockRejectedValueOnce(new TuyaError('REQUEST_TIMED_OUT', 'no answer'));
+      client.readControls.mockRejectedValueOnce(new TuyaError('REQUEST_TIMED_OUT', 'no answer'));
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true));
+      expect(accessory.endpoint.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(true);
+    });
+
+    test('should log an undone write Matter does not take', async () => {
+      // A read that answers clears the failure of the test before: this one is the first in a row.
+      await settle(accessory);
+      client.writeControls.mockRejectedValueOnce(new TuyaError('REQUEST_TIMED_OUT', 'no answer'));
+      client.readControls.mockRejectedValueOnce(new TuyaError('REQUEST_TIMED_OUT', 'no answer'));
+      vi.spyOn(accessory.endpoint, 'updateAttribute').mockRejectedValueOnce(new Error('refused'));
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith('"Desk" state could not be written to Matter: refused'));
+      await settle(accessory);
+      expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true);
+    });
+
+    test('should show what a controller wrote, over a read that was going on as it wrote', async () => {
+      client.values = { device: { on: true } };
+      let answerRead = (_values: { device: { on: boolean } }): void => undefined;
+      client.readControls.mockImplementationOnce(
+        async () =>
+          new Promise((resolve) => {
+            answerRead = resolve;
+          }),
+      );
+      const reading = accessory.refresh();
+      await vi.waitFor(() => expect(client.readControls).toHaveBeenCalled());
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      answerRead({ device: { on: true } });
+      await reading;
+      await vi.waitFor(() => expect(log.info).toHaveBeenCalledWith('"Desk" set power off'));
+      await vi.waitFor(() => expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(false));
+      // Back to on, for the tests that follow.
+      await settle(accessory);
+    });
+
     test('should ignore an on/off the plugin writes itself', async () => {
       await accessory.endpoint.setAttribute(OnOff, 'onOff', false);
       await settle(accessory);
@@ -263,6 +303,23 @@ describe('TuyaAccessory', () => {
       vi.mocked(log.warn).mockClear();
       await accessory.refresh();
       expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    test('should put a write back with no route and nothing reported yet', async () => {
+      const unrouted = new TuyaAccessory({
+        config: createDeviceConfig(plugFile, { deviceId: 'bf0000000000000077aa', name: 'Unrouted' }),
+        entry: entryOf(plugFile),
+        features: getDeviceFeatures(entryOf(plugFile)),
+        productName: 'Plug',
+        createConnection: (): undefined => undefined,
+        log,
+        vendorId,
+      });
+      await addAccessory(unrouted);
+      await unrouted.start();
+      await writeAsController(unrouted.endpoint, 'OnOff', 'onOff', true);
+      await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith(`"Unrouted" did not take power on: ${noRouteMessage}`));
+      await vi.waitFor(() => expect(unrouted.endpoint.getAttribute(OnOff, 'onOff')).toBe(false));
     });
 
     test('should read and write nothing once disposed', async () => {

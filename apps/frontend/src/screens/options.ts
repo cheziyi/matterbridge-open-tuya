@@ -194,7 +194,7 @@ function hostFields(draft: Draft): HTMLElement {
     h(
       'p',
       { class: 'help' },
-      'Where the plugin does not hear the device on your network, such as on another subnet or in a Docker container without host networking, enter its IP address, ideally one your router keeps for it, and the protocol version it speaks, which the Smart Life app does not show: tinytuya or tuya-local tell it. Leave the host empty to find the device by the broadcasts it sends.',
+      'Where the plugin does not hear the device on your network, such as on another subnet or in a Docker container without host networking, enter its IP address, ideally one your router keeps for it, and the protocol version it speaks, which the Smart Life app does not show: tinytuya or tuya-local tell it. For a device behind a gateway, enter those of the gateway. Leave the host empty to find the device by the broadcasts it sends.',
     ),
     h('div', { class: 'inline-form' }, host),
     h('label', { for: 'device-version' }, 'Protocol version'),

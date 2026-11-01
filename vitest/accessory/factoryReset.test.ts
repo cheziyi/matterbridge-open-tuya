@@ -131,4 +131,15 @@ describe('a device when the Matter node is reset to factory defaults', () => {
     // Once the node is online, the device is read again, and answers.
     await vi.waitFor(() => expect(accessory.getStatus()).toMatchObject({ isReachable: true, lastError: undefined }), { timeout: 5000 });
   });
+
+  test('should leave a write the device did not take to the read once the node is back, when it fails while the node goes offline', async () => {
+    client.values = { device: { outlet1: true, outlet2: false } };
+    await accessory.refresh();
+    client.writeControls.mockImplementationOnce(async () => new Promise((_resolve, reject) => server.lifecycle.offline.once(() => reject(new Error('no answer')))));
+    await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+    await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalled());
+    await server.erase();
+    await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith('"Strip" did not take outlet 1 off: no answer'), { timeout: 5000 });
+    await vi.waitFor(() => expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true), { timeout: 5000 });
+  });
 });

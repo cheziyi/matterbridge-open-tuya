@@ -28,6 +28,31 @@ import { type Draft, view } from './state.js';
 const maxNameLength = 32;
 
 /**
+ * Tell whether two models of a device say the same
+ *
+ * The stored model and the one the cloud gives hold the same fields in another order, which says nothing.
+ *
+ * @param {unknown} left One model, or undefined for a device without one.
+ * @param {unknown} right The other model, or undefined for a device without one.
+ * @returns {boolean} True when both hold the same data points, whatever the order of their fields.
+ */
+export function hasSameModel(left: unknown, right: unknown): boolean {
+  if (!isFields(left) || !isFields(right)) return JSON.stringify(left) === JSON.stringify(right);
+  const names = Object.keys(left);
+  return names.length === Object.keys(right).length && names.every((name) => hasSameModel(left[name], right[name]));
+}
+
+/**
+ * Tell whether a value of a model is an object of named fields, whose order says nothing
+ *
+ * @param {unknown} value The value.
+ * @returns {boolean} False for an array, whose order says something, and for any other value.
+ */
+function isFields(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
  * Copy the choices of how a device appears in Matter, and nothing else
  *
  * @param {Exposure} source What to copy them from.

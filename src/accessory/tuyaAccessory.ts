@@ -28,8 +28,8 @@ import { BridgedDeviceBasicInformation, OnOff } from 'matterbridge/matter/cluste
 import type { ControlValues, DataPoints, RoutedTuyaClient, TuyaDeviceEntry, TuyaErrorCode } from 'open-tuya';
 
 import type { TuyaDeviceConfig } from '../config.js';
-import { getErrorCode, getErrorMessage } from '../errors.js';
-import type { DeviceFeatures, SwitchFeature } from '../features.js';
+import { getErrorCode, getErrorMessage, ignoreFailure } from '../errors.js';
+import { type DeviceFeatures, readValue, type SwitchFeature } from '../features.js';
 import { EndpointIds } from '../platform/endpointIds.js';
 import { applyDeviceLabel, createMainEndpoint, createSideEndpoint, type EndpointIdentity } from './endpoints.js';
 import { type AccessoryLayout, getAccessoryLayout, type LayoutUnit } from './layout.js';
@@ -96,15 +96,6 @@ export interface TuyaAccessoryStatus {
  */
 function isControllerWrite(context: ActionContext): boolean {
   return context.fabric !== undefined;
-}
-
-/**
- * Do nothing: the settled value of a queued task is its caller's business, not the queue's
- *
- * @returns {void}
- */
-function ignore(): void {
-  // Intentionally empty.
 }
 
 /**
@@ -417,23 +408,43 @@ export class TuyaAccessory implements AccessoryEndpoints {
     this.log.info(`"${this.name}" received ${what}`);
     await this.enqueue(async () => {
       const client = this.connection?.client;
+      const written = { [feature.component]: { [feature.control]: isOn } };
       try {
         if (client === undefined) throw new Error(noRouteMessage);
-        await client.writeControls({ [feature.component]: { [feature.control]: isOn } });
+        await client.writeControls(written);
         this.log.info(`"${this.name}" set ${what}`);
-        this.values = mergeValues(this.values, { [feature.component]: { [feature.control]: isOn } });
+        // A read that was going on as the controller wrote may have put the old value back in Matter.
+        await this.apply(mergeValues(this.values, written), written);
       } catch (error) {
         this.recordError(error);
         this.log.error(`"${this.name}" did not take ${what}: ${getErrorMessage(error)}`);
         // Read back what the device holds, which undoes the request in Matter.
-        await this.readAndApply();
+        if (!(await this.readAndApply())) await this.undoWrite(feature, isOn);
       }
     });
   }
 
+  /**
+   * Undo a write in Matter when the device did not take it and its state cannot be read back either
+   *
+   * @param {SwitchFeature} feature The switch that was written.
+   * @param {boolean} isOn What the controller asked for.
+   * @returns {Promise<void>} Resolves when the switch shows what the device last reported, or else what it showed before the request.
+   */
+  private async undoWrite(feature: SwitchFeature, isOn: boolean): Promise<void> {
+    // The read once the node is online writes the state of the device.
+    if (this.isWaitingForNode()) return;
+    const values = this.values ?? {};
+    try {
+      await applyValues(this, this.layout, values, { [feature.component]: { [feature.control]: readValue(values, feature) ?? !isOn } });
+    } catch (error) {
+      this.log.warn(`"${this.name}" state could not be written to Matter: ${getErrorMessage(error)}`);
+    }
+  }
+
   private async enqueue<T>(task: () => Promise<T>): Promise<T> {
     const result = this.queue.then(task);
-    this.queue = result.then(ignore, ignore);
+    this.queue = result.then(ignoreFailure, ignoreFailure);
     return result;
   }
 
