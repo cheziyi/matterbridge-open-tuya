@@ -61,6 +61,7 @@ import { findDeviceEntry, getDeviceFeatures, getProductName } from './features.j
 import { AddressStore, type LanAddress } from './platform/addressStore.js';
 import { CloudRoute } from './platform/cloudRoute.js';
 import { EndpointIds, EndpointIdStore } from './platform/endpointIds.js';
+import { GatewayRoute } from './platform/gatewayRoute.js';
 import { SetupStore } from './platform/setupStore.js';
 import { findGateway, getDeviceSupport, probeDevice, type ProbeResult, probeThrough } from './setup/probe.js';
 import {
@@ -128,17 +129,31 @@ function isSameAddress(left: LanAddress | undefined, right: LanAddress | undefin
 }
 
 /**
- * Find where a gateway was given to be, in the options of the devices behind it
+ * Find where a gateway was given to be, in its own options when it is a device of its own, or in those of the devices behind it
  *
- * The first device with a host and a protocol version decides: one client serves them all, so they share one address.
+ * The gateway's own host decides, then the first device behind it with a host and a protocol version: one client
+ * serves them all, so they share one address.
  *
  * @param {readonly TuyaDeviceConfig[]} devices The stored devices.
  * @param {string} gatewayId The device ID of the gateway.
- * @returns {LanAddress | undefined} The address, when a device behind the gateway gives one.
+ * @returns {LanAddress | undefined} The address, when the gateway or a device behind it gives one.
  */
 function findGivenGatewayAddress(devices: readonly TuyaDeviceConfig[], gatewayId: string): LanAddress | undefined {
-  const device = devices.find((candidate) => candidate.gatewayId === gatewayId && candidate.host !== undefined && candidate.version !== undefined);
+  const given = devices.filter((candidate) => candidate.host !== undefined && candidate.version !== undefined);
+  const device = given.find((candidate) => candidate.deviceId === gatewayId) ?? given.find((candidate) => candidate.gatewayId === gatewayId);
   return device?.host !== undefined && device.version !== undefined ? { host: device.host, version: device.version } : undefined;
+}
+
+/**
+ * Find the gateway a stored device goes through on the LAN
+ *
+ * @param {Pick<TuyaDeviceConfig, 'deviceId' | 'gatewayId'>} device The device.
+ * @param {readonly TuyaDeviceConfig[]} devices The stored devices.
+ * @returns {string | undefined} Its gateway, or the device itself when devices behind it are stored, or undefined for a device reached directly.
+ */
+function findRouteGatewayId(device: Pick<TuyaDeviceConfig, 'deviceId' | 'gatewayId'>, devices: readonly TuyaDeviceConfig[]): string | undefined {
+  if (device.gatewayId !== undefined) return device.gatewayId;
+  return devices.some((candidate) => candidate.gatewayId === device.deviceId) ? device.deviceId : undefined;
 }
 
 /**
@@ -313,7 +328,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       if (status?.isReachable === true) state = 'online';
       else if (status?.isConnecting === true) state = 'connecting';
       else if (status !== undefined) state = 'offline';
-      const entry = findDeviceEntry(device);
+      // A running device holds its entry: the catalog is searched for a device that does not run, or that gets a new entry at the restart.
+      const entry = accessory !== undefined && !this.restartRequired.has(device.deviceId) ? accessory.entry : findDeviceEntry(device);
       return {
         ...withoutLocalKey(device),
         status: state,
@@ -595,7 +611,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Give a stored device a new client and read it through that, or start it again when it could not start
    *
-   * A device behind a gateway gets a new connection to the gateway, and so does every other device behind it.
+   * A device behind a gateway gets a new connection to the gateway, and so does every other device behind it, and the
+   * gateway itself when it is a device of its own.
    *
    * @param {string} deviceId The device ID.
    * @returns {Promise<boolean>} False when no device has that device ID.
@@ -606,11 +623,11 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       const device = this.devices.find((candidate) => candidate.deviceId === deviceId);
       if (device === undefined) return;
       isFound = true;
-      const { gatewayId } = device;
+      const gatewayId = findRouteGatewayId(device, this.devices);
       const gateway = gatewayId === undefined ? undefined : this.gateways.get(gatewayId);
       if (gateway !== undefined) gateway.isStuck = true;
       // A new connection to a gateway serves every device behind it, and ends the routes they have.
-      const devices = gatewayId === undefined ? [device] : this.devices.filter((candidate) => candidate.gatewayId === gatewayId);
+      const devices = gatewayId === undefined ? [device] : this.devices.filter((candidate) => candidate.gatewayId === gatewayId || candidate.deviceId === gatewayId);
       const reconnecting: Promise<void>[] = [];
       for (const candidate of devices) {
         const accessory = this.accessories.get(candidate.deviceId);
@@ -665,6 +682,11 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     this.log.debug(`Heard ${found.deviceId} on the LAN at ${found.host}, protocol ${found.version}`);
     try {
       await this.addressStore.write(found.deviceId, address);
+    } catch (error) {
+      // The address is kept for this run: the devices it reaches are reconnected all the same.
+      this.log.debug(`The address of ${found.deviceId} could not be stored: ${getErrorMessage(error)}`);
+    }
+    try {
       // The discovery follows a device that has a route on the LAN to its new address: only one without a route yet, or that speaks another version now, needs a new client.
       await this.enqueueChange(async () => {
         const reconnecting: Promise<void>[] = [];
@@ -672,13 +694,14 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
           if (device.deviceId !== found.deviceId && device.gatewayId !== found.deviceId) continue;
           const accessory = this.accessories.get(device.deviceId);
           if (accessory === undefined || device.isCloudOnly === true) continue;
-          const isGiven = device.gatewayId === found.deviceId ? findGivenGatewayAddress(this.devices, found.deviceId) !== undefined : device.host !== undefined;
+          const isGiven =
+            findRouteGatewayId(device, this.devices) === found.deviceId ? findGivenGatewayAddress(this.devices, found.deviceId) !== undefined : device.host !== undefined;
           if (!accessory.getStatus().hasLan || (hasNewVersion && !isGiven)) reconnecting.push(this.reconnect(device, accessory));
         }
         await Promise.all(reconnecting);
       });
-    } catch (error) {
-      this.log.debug(`The address of ${found.deviceId} could not be stored: ${getErrorMessage(error)}`);
+    } catch {
+      // enqueueChange logged it, or the platform is shutting down.
     }
   }
 
@@ -953,6 +976,10 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Create the route of a device on the LAN, directly or through its gateway
    *
+   * A gateway holds one connection on the LAN. One that is a device of its own, with devices behind it stored or
+   * being checked, goes through the client they share instead of a second one, which would take the connection
+   * from the first.
+   *
    * Edge cases:
    *  - no local key -> undefined: the LAN needs one
    *  - a device behind a gateway with no host given, whose gateway was not heard -> undefined
@@ -967,6 +994,10 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     if (localKey === undefined) return undefined;
     try {
       if (nodeId !== undefined && gatewayId !== undefined) return this.getGateway(gatewayId, localKey)?.createClient(nodeId);
+      if (findRouteGatewayId(device, this.devices) === deviceId || this.gateways.has(deviceId)) {
+        const gateway = this.getGateway(deviceId, localKey);
+        return gateway === undefined ? undefined : new GatewayRoute(gateway);
+      }
       const given = device.host !== undefined && device.version !== undefined ? { host: device.host, version: device.version } : undefined;
       const address = given ?? this.addresses.get(deviceId);
       if (address === undefined) return undefined;
@@ -1054,6 +1085,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     for (const device of previous) {
       if (!this.devices.some((candidate) => candidate.deviceId === device.deviceId)) await this.stopDevice(device);
     }
+    // Before the new routes: a gateway that is a device of its own gets a client of its own once no device goes through it.
+    await this.closeUnusedGateways();
     const reconnecting: Promise<void>[] = [];
     try {
       for (const device of this.devices) {
@@ -1067,15 +1100,17 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
         // built with, and gets its new ones at the next start.
         if (!hasSameExposure(before, device)) this.requireRestart(device);
         await accessory.updateConfig(device);
-        // A new address of a gateway replaces the client every device behind it goes through.
-        const { gatewayId } = device;
-        const hasGatewayMoved = gatewayId !== undefined && !isSameAddress(findGivenGatewayAddress(previous, gatewayId), findGivenGatewayAddress(devices, gatewayId));
+        // A new address of a gateway replaces the client every device behind it goes through, and so does a gateway
+        // that is a device of its own getting its first device behind it, or losing its last.
+        const gatewayId = findRouteGatewayId(device, devices);
+        const hasGatewayMoved =
+          gatewayId !== findRouteGatewayId(before, previous) ||
+          (gatewayId !== undefined && !isSameAddress(findGivenGatewayAddress(previous, gatewayId), findGivenGatewayAddress(devices, gatewayId)));
         if (hasGatewayMoved || !hasSameConnection(before, device)) reconnecting.push(this.reconnect(device, accessory));
       }
     } finally {
       // Changes run one after the other, also when this one fails halfway.
       await Promise.all(reconnecting);
-      await this.closeUnusedGateways();
     }
   }
 
@@ -1180,5 +1215,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       this.log.info(`"${name}" stopped`);
     }
     await this.addressStore.remove(deviceId);
+    // The address of its gateway goes with the last device reached through it.
+    const { gatewayId } = device;
+    if (gatewayId !== undefined && !this.listLanIds().includes(gatewayId)) await this.addressStore.remove(gatewayId);
   }
 }

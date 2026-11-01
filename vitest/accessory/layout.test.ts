@@ -15,7 +15,7 @@ describe('getAccessoryLayout', () => {
     expect(layout?.main).toMatchObject({ type: 'outlet', feature: { id: 'device.on' } });
     expect(layout?.sides).toEqual([]);
     expect(layout?.meter?.power?.unit).toBe('W');
-    expect(layout?.isComposed).toBe(true);
+    expect(layout?.isComposed).toBe(false);
   });
 
   test('should leave out the meter and the outlets hidden, and show the setting switches added', () => {

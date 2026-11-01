@@ -222,11 +222,14 @@ async function handlePost(platform: SetupPlatform, path: string, body: Record<st
     return { ok: true, result: await platform.probe(body.deviceId) };
   }
   if (path === 'device') {
-    const device = parseDeviceConfig(body.device);
+    // A setting the page sends that is not valid refuses the device: a stored one falls back, this one is a mistake to fix.
+    const problems: string[] = [];
+    const device = parseDeviceConfig(body.device, (problem) => problems.push(problem));
     if (device === undefined) return fail('The device needs a name of at most 32 characters, its device ID, its product key and its catalog entry');
     const { host } = toRecord(body.device);
     if (host !== undefined && (normalizeHost(host) === undefined || device.version === undefined))
       return fail(`Enter a host name or an IPv4 address and the protocol version for ${device.name}, or leave the host empty to find it on your network`);
+    if (problems.length > 0) return fail(`The device was not saved: ${problems.join('; ')}`);
     await platform.saveDevice(device);
     return { ok: true, state: await platform.getSetupState() };
   }

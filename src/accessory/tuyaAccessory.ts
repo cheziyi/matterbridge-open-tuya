@@ -501,7 +501,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
   private receiveValues(values: ControlValues): void {
     void this.enqueue(async () => {
       if (this.isDisposed) return;
-      this.failureCount = 0;
+      this.markAnswered();
       await this.apply(mergeValues(this.values, values), values);
     });
   }

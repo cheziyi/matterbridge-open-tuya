@@ -102,6 +102,10 @@ describe('handleSetupRequest', () => {
     const hostless = { ok: false, error: 'Enter a host name or an IPv4 address and the protocol version for Desk, or leave the host empty to find it on your network' };
     expect(await handleSetupRequest(platform, 'POST', 'device', { device: { ...device, host: 'not a host' } })).toEqual(hostless);
     expect(await handleSetupRequest(platform, 'POST', 'device', { device: { ...device, version: undefined } })).toEqual(hostless);
+    expect(await handleSetupRequest(platform, 'POST', 'device', { device: { ...device, isComposed: 'yes' } })).toEqual({
+      ok: false,
+      error: 'The device was not saved: "Desk" has the isComposed "yes", which is not valid',
+    });
     expect(await handleSetupRequest(platform, 'POST', 'device', 'junk')).toMatchObject({ ok: false });
     expect(platform.saveDevice).toHaveBeenCalledTimes(1);
   });

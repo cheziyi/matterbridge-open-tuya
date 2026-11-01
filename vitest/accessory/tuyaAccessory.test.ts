@@ -259,6 +259,9 @@ describe('TuyaAccessory', () => {
       expect(accessory.endpoint.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(false);
       expect(log.warn).toHaveBeenCalledWith('"Desk" is unreachable: gone');
       expect(accessory.getStatus()).toMatchObject({ isReachable: false, route: undefined, lastError: 'gone', lastErrorCode: 'CONNECTION_FAILED' });
+      // A push says the device is back as a read does: the error of before goes with it.
+      client.push({ device: { on: true } });
+      await vi.waitFor(() => expect(accessory.getStatus()).toMatchObject({ isReachable: true, lastError: undefined, lastErrorCode: undefined }));
       expect(await accessory.refresh()).toBe(true);
       expect(accessory.endpoint.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(true);
       expect(accessory.getStatus().lastError).toBeUndefined();
@@ -563,7 +566,7 @@ describe('TuyaAccessory', () => {
         indicator: { on: true },
       });
       accessory = new TuyaAccessory({
-        config: createDeviceConfig(multiSensorFile, { deviceId: 'bf0000000000000003aa', name: 'Hall', addedFeatures: ['indicator.on'] }),
+        config: createDeviceConfig(multiSensorFile, { deviceId: 'bf0000000000000003aa', name: 'Hall', isComposed: true, addedFeatures: ['indicator.on'] }),
         entry: entryOf(multiSensorFile),
         features: getDeviceFeatures(entryOf(multiSensorFile)),
         productName: 'Motion sensor',

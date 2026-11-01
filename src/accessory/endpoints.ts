@@ -248,9 +248,11 @@ function addUnitClusters(endpoint: MatterbridgeEndpoint, unit: LayoutUnit): void
  * @returns {MatterbridgeEndpoint} The endpoint, with its clusters and nothing subscribed yet.
  */
 export function createMainEndpoint(identity: EndpointIdentity, layout: AccessoryLayout): MatterbridgeEndpoint {
-  const deviceTypes = [getDeviceType(layout.main), ...(layout.meter === undefined ? [] : [electricalSensor]), bridgedNode, powerSource] as [
-    DeviceTypeDefinition,
-    ...DeviceTypeDefinition[],
+  const deviceTypes: [DeviceTypeDefinition, ...DeviceTypeDefinition[]] = [
+    getDeviceType(layout.main),
+    ...(layout.meter === undefined ? [] : [electricalSensor]),
+    bridgedNode,
+    powerSource,
   ];
   const endpoint = createBasicInformation(
     new MatterbridgeEndpoint(deviceTypes, { id: identity.ids.resolve(identity.serial) }).createDefaultIdentifyClusterServer(),

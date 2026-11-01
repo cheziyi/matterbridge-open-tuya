@@ -124,7 +124,7 @@ export type TuyaPlatformConfig = BasePlatformConfig & {
 };
 
 /** What a stored device without a setting falls back to. */
-export const defaultExposure: Readonly<TuyaDeviceExposure> = { hiddenFeatures: [], addedFeatures: [], isComposed: true };
+export const defaultExposure: Readonly<TuyaDeviceExposure> = { hiddenFeatures: [], addedFeatures: [], isComposed: false };
 
 /** The id of the meter of the main outlet, in `hiddenFeatures`. */
 export const meterFeatureId = 'meter';
@@ -308,10 +308,10 @@ function parseModel(value: unknown): TuyaDeviceModel | undefined {
  *  - a catalog file and a model -> the catalog file, and the model is dropped
  *
  * @param {unknown} value The stored value.
- * @param {(message: string) => void} [report] Called once for each setting that is stored but not valid.
+ * @param {(problem: string, fallback: string) => void} [report] Called once for each setting that is stored but not valid, with what is wrong and what is used instead.
  * @returns {TuyaDeviceConfig | undefined} The device, or undefined when one of those is missing or not valid.
  */
-export function parseDeviceConfig(value: unknown, report?: (message: string) => void): TuyaDeviceConfig | undefined {
+export function parseDeviceConfig(value: unknown, report?: (problem: string, fallback: string) => void): TuyaDeviceConfig | undefined {
   if (!isValidObject(value)) return undefined;
   const raw: Record<string, unknown> = { ...value };
   const name = normalizeDeviceName(raw.name);
@@ -322,12 +322,12 @@ export function parseDeviceConfig(value: unknown, report?: (message: string) => 
   if (catalogFile === undefined && model === undefined) return undefined;
   const features = (key: 'hiddenFeatures' | 'addedFeatures'): string[] => {
     const ids = parseFeatureIds(raw[key]);
-    if (ids === undefined && raw[key] !== undefined) report?.(`"${name}" has the ${key} ${JSON.stringify(raw[key])}, which is not valid: none is used instead`);
+    if (ids === undefined && raw[key] !== undefined) report?.(`"${name}" has the ${key} ${JSON.stringify(raw[key])}, which is not valid`, 'none is used instead');
     return ids ?? [];
   };
   let isComposed = defaultExposure.isComposed;
   if (isValidBoolean(raw.isComposed)) isComposed = raw.isComposed;
-  else if (raw.isComposed !== undefined) report?.(`"${name}" has the isComposed ${JSON.stringify(raw.isComposed)}, which is not valid: ${String(isComposed)} is used instead`);
+  else if (raw.isComposed !== undefined) report?.(`"${name}" has the isComposed ${JSON.stringify(raw.isComposed)}, which is not valid`, `${String(isComposed)} is used instead`);
   const device: TuyaDeviceConfig = {
     name,
     deviceId: raw.deviceId,
@@ -351,12 +351,13 @@ export function parseDeviceConfig(value: unknown, report?: (message: string) => 
     device.version = raw.version;
   } else if (raw.host !== undefined || raw.version !== undefined) {
     report?.(
-      `"${name}" has the host ${JSON.stringify(raw.host)} and the version ${JSON.stringify(raw.version)}, which are not valid together: it is searched for on the LAN instead`,
+      `"${name}" has the host ${JSON.stringify(raw.host)} and the version ${JSON.stringify(raw.version)}, which are not valid together`,
+      'it is searched for on the LAN instead',
     );
   }
   if (raw.isCloudOnly === true) device.isCloudOnly = true;
   else if (raw.isCloudOnly !== undefined && raw.isCloudOnly !== false)
-    report?.(`"${name}" has the isCloudOnly ${JSON.stringify(raw.isCloudOnly)}, which is not valid: it is tried on the LAN first instead`);
+    report?.(`"${name}" has the isCloudOnly ${JSON.stringify(raw.isCloudOnly)}, which is not valid`, 'it is tried on the LAN first instead');
   if (isValidString(raw.localKey, 1, maxFieldLength)) device.localKey = raw.localKey;
   return device;
 }
@@ -376,7 +377,7 @@ export function parseDeviceConfig(value: unknown, report?: (message: string) => 
 export function parseDeviceConfigs(value: unknown, report?: (message: string) => void): TuyaDeviceConfig[] {
   const devices: TuyaDeviceConfig[] = [];
   for (const entry of Array.isArray(value) ? value : []) {
-    const device = parseDeviceConfig(entry, report);
+    const device = parseDeviceConfig(entry, (problem, fallback) => report?.(`${problem}: ${fallback}`));
     if (device === undefined) {
       report?.(
         'A stored device has no valid name, device ID, product key, or catalog file or model, and is ignored. It stays in the configuration as it is until a device with its name or its device ID is added in the setup page',

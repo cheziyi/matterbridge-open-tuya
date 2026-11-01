@@ -99,14 +99,19 @@ describe('config', () => {
       { ...createDeviceConfig(plugFile), hiddenFeatures: 'outlet', isComposed: 'yes', host: 'not a host', version: '3.3', isCloudOnly: 'no', nodeId: 'a4c1380000000001' },
       report,
     );
-    expect(device).toMatchObject({ hiddenFeatures: [], isComposed: true });
+    expect(device).toMatchObject({ hiddenFeatures: [], isComposed: false });
     expect(device?.host).toBeUndefined();
     expect(device?.isCloudOnly).toBeUndefined();
     // A node ID without its gateway is dropped.
     expect(device?.nodeId).toBeUndefined();
     expect(report).toHaveBeenCalledTimes(4);
-    expect(report).toHaveBeenCalledWith('"Desk" has the hiddenFeatures "outlet", which is not valid: none is used instead');
+    expect(report).toHaveBeenCalledWith('"Desk" has the hiddenFeatures "outlet", which is not valid', 'none is used instead');
+    expect(report).toHaveBeenCalledWith('"Desk" has the isComposed "yes", which is not valid', 'false is used instead');
     expect(parseDeviceConfig({ ...createDeviceConfig(plugFile), isCloudOnly: false, host: '192.168.1.20' }, report)?.host).toBeUndefined();
+    // The stored list reports the problem and the fallback in one.
+    report.mockClear();
+    expect(parseDeviceConfigs([{ ...createDeviceConfig(plugFile), isComposed: 'yes' }], report)).toHaveLength(1);
+    expect(report).toHaveBeenCalledWith('"Desk" has the isComposed "yes", which is not valid: false is used instead');
   });
 
   test('should refuse a device without a name, a device ID, a product key or a catalog file', () => {
@@ -148,7 +153,7 @@ describe('config', () => {
     expect(hasSameConnection(desk, { ...desk, name: 'Hall' })).toBe(true);
     expect(hasSameConnection(desk, { ...desk, localKey: 'fedcba9876543210' })).toBe(false);
     expect(hasSameExposure(desk, { ...desk, name: 'Hall', hiddenFeatures: ['device.outlet3', 'device.outlet2'] })).toBe(true);
-    expect(hasSameExposure(desk, { ...desk, isComposed: false })).toBe(false);
+    expect(hasSameExposure(desk, { ...desk, isComposed: true })).toBe(false);
     expect(hasSameExposure(desk, { ...desk, addedFeatures: ['device.childLock'] })).toBe(false);
   });
 

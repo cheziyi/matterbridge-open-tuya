@@ -817,7 +817,7 @@ describe('TuyaPlatform', () => {
     expect(restartRequired).toHaveBeenCalledTimes(1);
     // A second change before the restart asks for it again, and notes the device once.
     vi.mocked(log.notice).mockClear();
-    await edge.saveDevice({ ...before, catalogFile: stripFile, isComposed: false });
+    await edge.saveDevice({ ...before, catalogFile: stripFile, isComposed: true });
     expect(restartRequired).toHaveBeenCalledTimes(2);
     expect(log.notice).not.toHaveBeenCalledWith(expect.stringContaining('is built again with its new options'));
 
@@ -914,11 +914,14 @@ describe('TuyaPlatform', () => {
 
   test('should remove a device and its endpoints, and forget its address', async () => {
     expect(await platform.removeDevice('bf0000000000000055aa')).toBe(false);
+    expect(await platform.context?.get(`lan:${gatewayId}`)).toEqual({ host: '192.168.1.30', version: '3.3' });
     expect(await platform.removeDevice(nodeDeviceId)).toBe(true);
     expect(log.info).toHaveBeenCalledWith('"Zigbee" stopped');
     // The desk, and the bench with a device of its own for each outlet.
     expect(platform.getDevices()).toHaveLength(6);
     expect(await platform.context?.get(`lan:${nodeDeviceId}`)).toBeUndefined();
+    // The gateway's address goes with the last device behind it.
+    expect(await platform.context?.get(`lan:${gatewayId}`)).toBeUndefined();
   });
 
   test('should change the log level, and shut down unregistering every device when it is set to', async () => {
@@ -927,6 +930,9 @@ describe('TuyaPlatform', () => {
     platform.config.unregisterOnShutdown = true;
     await platform.onShutdown();
     expect(platform.getDevices()).toHaveLength(0);
+    // A device heard after the shutdown is stored, and reconnects nothing.
+    await platform.hearDevice({ deviceId: deskId, host: '192.168.1.21', version: '3.3', productKey: 'x' });
+    expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('could not be stored'));
   });
 
   describe('changes that overlap', () => {
@@ -1235,6 +1241,70 @@ describe('TuyaPlatform', () => {
       expect(set).toHaveBeenCalledWith('setup', expect.objectContaining({ account: expect.objectContaining({ session: refreshed }) }));
       expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('could not be stored'));
       await platform.unregisterAllDevices();
+    });
+
+    test('should reach a gateway that is a device of its own through the client of the devices behind it', async () => {
+      const hubId = 'bf00000000000000gw81';
+      const node = 'a4c1380000000081';
+      const hub = plug(hubId, 'Hub', { localKey: 'gatewaykey000001', host: '10.0.0.81', version: '3.4' });
+      const behind = plug(deskId, 'Desk', { nodeId: node, gatewayId: hubId, localKey: 'gatewaykey000001' });
+      net.dataPoints.set(hubId, plugDataPoints);
+      net.dataPoints.set(node, plugDataPoints);
+      await startPlatform([hub, behind]);
+      net.listed = [
+        createCloudDevice(plugFile, { deviceId: hubId, name: 'Hub', localKey: 'gatewaykey000001' }),
+        createCloudDevice(plugFile, { deviceId: deskId, name: 'Desk', nodeId: node, localKey: 'gatewaykey000001' }),
+      ];
+      await platform.pollDevices();
+      // One client, at the host given for the gateway itself, serves the gateway and the device behind it.
+      expect(net.lanOptions.filter((options) => options.deviceId === hubId)).toEqual([expect.objectContaining({ host: '10.0.0.81', version: '3.4' })]);
+      const shared = routeOf(net.lan, hubId);
+      expect(shared.readDataPoints).toHaveBeenCalled();
+      expect(routeOf(net.lan, node).readDataPoints).toHaveBeenCalled();
+      expect((await platform.getSetupState()).devices.map((device) => device.route)).toEqual(['lan', 'lan']);
+      // A reconnection of the gateway builds the shared client again, for the device behind it too.
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      await platform.reconnectDevice(hubId);
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(shared.close).toHaveBeenCalled();
+      // The gateway removed as a device leaves the client to the device behind it: a check of the gateway goes through it.
+      const rebuilt = routeOf(net.lan, hubId);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.removeDevice(hubId);
+      expect(rebuilt.close).not.toHaveBeenCalled();
+      expect(await platform.probe(hubId)).toMatchObject({ status: 'ready', route: 'lan' });
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      expect(rebuilt.close).not.toHaveBeenCalled();
+      // And so does the gateway stored again.
+      await platform.saveDevice(hub);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      // Without a device behind it, the gateway gets a client of its own, and the shared one is closed first.
+      update.mockClear();
+      await platform.removeDevice(deskId);
+      expect(rebuilt.close).toHaveBeenCalled();
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledTimes(1);
+      const own = routeOf(net.lan, hubId);
+      expect(own).not.toBe(rebuilt);
+      // A device stored behind it again puts the gateway back on a shared client.
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(behind);
+      expect(own.close).toHaveBeenCalled();
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      update.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should leave a gateway that is a device of its own without a route on the LAN until it is heard', async () => {
+      const hubId = 'bf00000000000000gw82';
+      await startPlatform([
+        plug(hubId, 'Hub', { localKey: 'gatewaykey000001' }),
+        plug(deskId, 'Desk', { nodeId: 'a4c1380000000082', gatewayId: hubId, localKey: 'gatewaykey000001' }),
+      ]);
+      expect((await platform.getSetupState()).devices.map((device) => device.hasLan)).toEqual([false, false]);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      await stopPlatform();
     });
 
     test('should keep a device on its gateway when the cloud withholds its key or does not list the gateway', async () => {
