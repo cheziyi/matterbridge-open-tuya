@@ -35,7 +35,7 @@ import {
 } from 'matterbridge/matter/clusters';
 import type { ControlValues } from 'open-tuya';
 
-import { readValue, type SensorFeature } from '../features.js';
+import { readValue } from '../features.js';
 import {
   criticalBatteryInPercent,
   lowBatteryInPercent,
@@ -46,6 +46,7 @@ import {
   toMatterMeterReading,
   toMatterTemperature,
 } from '../mapping.js';
+import { getTemperatureUnit } from '../temperatureUnit.js';
 import type { AccessoryLayout, LayoutUnit } from './layout.js';
 
 /** The endpoint of each unit of a device, as the accessory built them. */
@@ -54,19 +55,6 @@ export interface AccessoryEndpoints {
   readonly endpoint: MatterbridgeEndpoint;
   /** The endpoint of each side unit, by the id of its feature. */
   readonly sideEndpoints: ReadonlyMap<string, MatterbridgeEndpoint>;
-}
-
-/**
- * Get the unit of a temperature, on a device that switches its unit at runtime as well
- *
- * @param {ControlValues} values The controls the device reports.
- * @param {SensorFeature} feature The temperature sensor.
- * @returns {string | undefined} The unit the device reports, or the one the catalog gives.
- */
-function getTemperatureUnit(values: ControlValues, feature: SensorFeature): string | undefined {
-  if (feature.unitFrom === undefined) return feature.unit;
-  const unit = readValue(values, { component: feature.component, control: feature.unitFrom });
-  return typeof unit === 'string' ? unit : feature.unit;
 }
 
 /**

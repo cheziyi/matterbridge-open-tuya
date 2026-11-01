@@ -172,7 +172,15 @@ function composedSection(draft: Draft): HTMLElement {
 
 // The host and the version are read as they are typed, with no redraw: no other text on the page names them.
 function hostFields(draft: Draft): HTMLElement {
-  const host = h('input', { type: 'text', id: 'device-host', value: draft.host, placeholder: 'Found on your network', maxLength: 253, autocomplete: 'off', spellcheck: false });
+  const host = h('input', {
+    type: 'text',
+    id: 'device-host',
+    value: draft.host,
+    placeholder: 'Leave empty to find it on your network',
+    maxLength: 253,
+    autocomplete: 'off',
+    spellcheck: false,
+  });
   host.addEventListener('input', () => {
     draft.host = host.value.trim();
   });
@@ -184,20 +192,20 @@ function hostFields(draft: Draft): HTMLElement {
         draft.version = version.value as LanVersion | '';
       },
     },
-    h('option', { value: '', selected: draft.version === '' }, 'Pick the version'),
+    h('option', { value: '', selected: draft.version === '' }, 'Not set'),
     ...lanVersions.map((value) => h('option', { value, selected: value === draft.version }, value)),
   );
   return h(
     'div',
     { class: 'field' },
-    h('label', { for: 'device-host' }, 'Host'),
+    h('label', { for: 'device-host' }, 'IP address or host name (optional)'),
     h(
       'p',
       { class: 'help' },
-      'Where the plugin does not hear the device on your network, such as on another subnet or in a Docker container without host networking, enter its IP address, ideally one your router keeps for it, and the protocol version it speaks, which the Smart Life app does not show: tinytuya or tuya-local tell it. For a device behind a gateway, enter those of the gateway. Leave the host empty to find the device by the broadcasts it sends.',
+      'Most devices need neither of these: leave both empty, and the plugin finds the device by the broadcasts it sends. Only where it does not hear the device on your network, such as on another subnet or in a Docker container without host networking, enter its IP address, ideally one your router keeps for it, and the protocol version it speaks, which the Smart Life app does not show: tinytuya or tuya-local tell it. For a device behind a gateway, enter those of the gateway.',
     ),
     h('div', { class: 'inline-form' }, host),
-    h('label', { for: 'device-version' }, 'Protocol version'),
+    h('label', { for: 'device-version' }, 'Protocol version (only with an IP address or host name)'),
     version,
   );
 }

@@ -27,6 +27,8 @@ import type { NodeStorage } from 'node-persist-manager';
 import { ignoreFailure } from '../errors.js';
 
 const setupKey = 'setup';
+/** A second copy, written after the first: a crash during a write damages one of them at most. */
+const copyKey = 'setup.copy';
 
 /** The account and the devices as they are stored, or what another version left there: `parseAccountConfig` and `parseDeviceConfigs` read them. */
 export interface StoredSetup {
@@ -57,11 +59,23 @@ export class SetupStore {
   /**
    * Read the account and the devices
    *
-   * @returns {Promise<StoredSetup>} What is stored, or nothing when what is stored is not an object.
+   * Matterbridge opens the storage to forgive what it cannot parse, so a damaged file reads as if nothing was ever
+   * stored. Only the second copy tells the two apart.
+   *
+   * @param {(message: string) => void} report Called when what is stored cannot be read.
+   * @returns {Promise<StoredSetup>} What is stored, or the second copy when that cannot be read, or nothing when neither can.
    */
-  async read(): Promise<StoredSetup> {
-    const stored: unknown = await this.getStorage()?.get(setupKey);
-    return isValidObject(stored) ? { ...stored } : {};
+  async read(report: (message: string) => void): Promise<StoredSetup> {
+    const storage = this.getStorage();
+    const stored: unknown = await storage?.get(setupKey);
+    if (isValidObject(stored)) return { ...stored };
+    const copy: unknown = await storage?.get(copyKey);
+    if (isValidObject(copy)) {
+      report('The stored Tuya account and devices cannot be read: using the copy from the write before');
+      return { ...copy };
+    }
+    if (stored !== undefined) report('The stored Tuya account and devices cannot be read: sign in and add the devices again in the setup page');
+    return {};
   }
 
   /**
@@ -69,11 +83,19 @@ export class SetupStore {
    *
    * @param {StoredSetup} setup What to store.
    * @returns {Promise<void>} Resolves when it is stored.
+   * @throws {Error} When it cannot be stored, such as when the storage is closed: a refresh token that works once must not be lost without a word.
    */
   async write(setup: StoredSetup): Promise<void> {
-    const result = this.writes.then(async () => this.getStorage()?.set(setupKey, setup));
+    const result = this.writes.then(async () => this.writeBoth(setup));
     this.writes = result.then(ignoreFailure, ignoreFailure);
     return result;
+  }
+
+  private async writeBoth(setup: StoredSetup): Promise<void> {
+    const storage = this.getStorage();
+    if (storage === undefined) throw new Error('The storage of the platform is closed');
+    await storage.set(setupKey, setup);
+    await storage.set(copyKey, setup);
   }
 
   /**

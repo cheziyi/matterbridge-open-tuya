@@ -21,6 +21,7 @@
  * limitations under the License.
  */
 
+import { getTemperatureUnit } from '../../../src/temperatureUnit.js';
 import type { ControlRef, DeviceFeatures, ProbeResult, SensorFeature } from './api.js';
 
 type Values = NonNullable<ProbeResult['values']>;
@@ -29,17 +30,10 @@ function read(values: Values, ref: ControlRef): boolean | number | string | unde
   return values[ref.component]?.[ref.control];
 }
 
-// The unit the device reports, on a device that switches it, or the one the catalog gives: as the plugin reads it for Matter.
-function temperatureUnit(values: Values, feature: SensorFeature): string | undefined {
-  if (feature.unitFrom === undefined) return feature.unit;
-  const unit = read(values, { component: feature.component, control: feature.unitFrom });
-  return typeof unit === 'string' ? unit : feature.unit;
-}
-
 // Such as "21.5 °C" or "Open".
 function describeSensor(feature: SensorFeature, value: boolean | number | string, values: Values): string {
   if (feature.kind === 'temperature') {
-    const unit = temperatureUnit(values, feature);
+    const unit = getTemperatureUnit(values, feature);
     return `${String(value)} °${unit !== undefined && /^f/i.test(unit) ? 'F' : 'C'}`;
   }
   if (feature.kind === 'humidity') return `${String(value)} % humidity`;

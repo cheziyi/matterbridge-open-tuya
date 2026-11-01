@@ -171,7 +171,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /** Where each device was last heard on the LAN, or stored as heard at before the restart, by its device ID. */
   private readonly addresses = new Map<string, LanAddress>();
   /** The client of each gateway the devices behind it are reached through, with the local key and the address it was built with, and whether a device gave that address, by its device ID. */
-  private readonly gateways = new Map<string, { client: LocalTuyaClient; localKey: string; address: LanAddress; isGiven: boolean }>();
+  private readonly gateways = new Map<string, { client: LocalTuyaClient; localKey: string; address: LanAddress; isGiven: boolean; isStuck?: boolean }>();
   /** How many checks of a device are going on, which may each hold the client of a gateway no stored device is behind. */
   private checksInProgress = 0;
   /** The devices of the account as the cloud last listed them, by their device ID, with their local keys: the setup page never sees those. */
@@ -243,9 +243,6 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   override async onShutdown(reason?: string): Promise<void> {
     this.isStopping = true;
 
-    // Always call super.onShutdown(reason)
-    await super.onShutdown(reason);
-
     this.log.info(`Shutting down platform ${this.config.name} with reason: ${reason ?? 'no reason provided'}...`);
 
     this.stopTimers();
@@ -261,6 +258,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     // A session refreshed until now is stored before Matterbridge closes the storage.
     await this.setupStore.flush();
     if (this.config.unregisterOnShutdown) await this.unregisterAllDevices();
+
+    // Always call super.onShutdown(reason), last here: it closes the storage of the platform.
+    await super.onShutdown(reason);
 
     this.log.info(`Platform ${this.config.name} shut down successfully`);
   }
@@ -421,12 +421,11 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   async signOut(): Promise<void> {
     this.cancelQrLogin();
     await this.enqueueChange(async () => {
+      await this.storeAccount();
       await this.cloud?.close().catch(ignoreFailure);
       this.cloud = undefined;
-      this.account = undefined;
       this.isAccountRejected = false;
       this.listed = new Map();
-      await this.storeSetup();
       await this.reconnectAll();
     });
     this.log.notice('Signed out of the Tuya account');
@@ -596,6 +595,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Give a stored device a new client and read it through that, or start it again when it could not start
    *
+   * A device behind a gateway gets a new connection to the gateway, and so does every other device behind it.
+   *
    * @param {string} deviceId The device ID.
    * @returns {Promise<boolean>} False when no device has that device ID.
    */
@@ -605,8 +606,18 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       const device = this.devices.find((candidate) => candidate.deviceId === deviceId);
       if (device === undefined) return;
       isFound = true;
-      const accessory = this.accessories.get(deviceId);
-      await (accessory === undefined ? this.startDevice(device) : this.reconnect(device, accessory));
+      const { gatewayId } = device;
+      const gateway = gatewayId === undefined ? undefined : this.gateways.get(gatewayId);
+      if (gateway !== undefined) gateway.isStuck = true;
+      // A new connection to a gateway serves every device behind it, and ends the routes they have.
+      const devices = gatewayId === undefined ? [device] : this.devices.filter((candidate) => candidate.gatewayId === gatewayId);
+      const reconnecting: Promise<void>[] = [];
+      for (const candidate of devices) {
+        const accessory = this.accessories.get(candidate.deviceId);
+        if (accessory === undefined) await this.startDevice(candidate);
+        else reconnecting.push(this.reconnect(candidate, accessory));
+      }
+      await Promise.all(reconnecting);
     });
     return isFound;
   }
@@ -747,16 +758,15 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private async setAccount(account: TuyaAccountConfig, cloud = this.createCloud(account), listing?: readonly TuyaCloudDevice[]): Promise<void> {
     try {
       await this.enqueueChange(async () => {
+        await this.storeAccount(account);
         await this.cloud?.close().catch(ignoreFailure);
-        this.account = account;
         this.cloud = cloud;
         this.isAccountRejected = false;
         this.listed = new Map(listing?.map((device) => [device.deviceId, device]));
-        await this.storeSetup();
         await this.reconnectAll();
       });
     } catch (error) {
-      // Refused by the shutdown: nothing else holds this account to close it.
+      // Refused by the shutdown, or not stored: nothing else holds this account to close it.
       if (this.cloud !== cloud) await cloud.close().catch(ignoreFailure);
       throw error;
     }
@@ -821,23 +831,23 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   /**
    * Read what the cloud lists of a device as the fields of a stored device
    *
-   * The node and the gateway are always there, undefined for a device the cloud does not place behind a gateway: merged
-   * over a stored device, they take away a gateway it no longer is behind. A local key the cloud withholds stays as stored.
+   * The node and the gateway are undefined for a device with no node ID: merged over a stored device, they take away a
+   * gateway it no longer is behind. They are left out for a device with a node ID whose gateway is not found, and stay as
+   * stored, like a local key the cloud withholds.
    *
    * @param {TuyaCloudDevice} device The device as the cloud lists it.
    * @returns {Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'>} The fields the cloud gives.
    */
   private fromListing(device: TuyaCloudDevice): Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'> {
     const gateway = findGateway(device, [...this.listed.values()]);
-    const fields: Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'> = {
-      productKey: device.productKey,
-      cloudName: device.name,
-      nodeId: undefined,
-      gatewayId: undefined,
-    };
+    const fields: Pick<TuyaDeviceConfig, 'productKey' | 'cloudName' | 'category' | 'nodeId' | 'gatewayId' | 'localKey'> = { productKey: device.productKey, cloudName: device.name };
     if (device.category !== '') fields.category = device.category;
     if (device.localKey !== undefined) fields.localKey = device.localKey;
-    if (device.nodeId !== undefined && gateway !== undefined) {
+    // Only a device with no node ID has left its gateway: a gateway not found may be one the cloud does not list, or a key it withholds.
+    if (device.nodeId === undefined) {
+      fields.nodeId = undefined;
+      fields.gatewayId = undefined;
+    } else if (gateway !== undefined) {
       fields.nodeId = device.nodeId;
       fields.gatewayId = gateway.deviceId;
     }
@@ -892,7 +902,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * any more, is closed. A host given for a device behind the gateway is where the gateway is reached, as a host given
    * for any other device: a new one builds the client again in the same way, and so does taking it away, once the
    * gateway was heard elsewhere. A client built from what was heard follows the gateway to a new host by itself, but
-   * keeps the protocol version it was built with: a new version builds it again too.
+   * keeps the protocol version it was built with: a new version builds it again too. So does a reconnection asked for
+   * in the setup page, for a connection that stopped answering.
    *
    * Closing a client ends the routes of every device behind it: whoever changes the address reconnects them all.
    *
@@ -905,10 +916,11 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     const given = findGivenGatewayAddress(this.devices, gatewayId);
     const heard = this.addresses.get(gatewayId);
     const hasNewVersion = known !== undefined && heard !== undefined && heard.version !== known.address.version;
-    if (known?.localKey === localKey && given === undefined && !known.isGiven && !hasNewVersion) return known.client;
+    const isUsable = known?.localKey === localKey && known.isStuck !== true;
+    if (isUsable && given === undefined && !known.isGiven && !hasNewVersion) return known.client;
     const address = given ?? heard ?? known?.address;
     if (address === undefined) return undefined;
-    if (known?.localKey === localKey && isSameAddress(address, known.address)) {
+    if (isUsable && isSameAddress(address, known.address)) {
       known.isGiven = given !== undefined;
       return known.client;
     }
@@ -996,7 +1008,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private async readSetup(): Promise<void> {
     // The platform storage is not there until the platform is ready.
     await this.ready;
-    const stored = await this.setupStore.read();
+    const stored = await this.setupStore.read((message) => this.log.warn(message));
     this.account = parseAccountConfig(stored.account);
     if (stored.account !== undefined && this.account === undefined) this.log.warn('The stored Tuya account cannot be read: sign in again in the setup page');
     this.devices = parseDeviceConfigs(stored.devices, (message) => this.log.warn(message));
@@ -1005,8 +1017,21 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
 
   private async storeSetup(): Promise<void> {
     // A device this version cannot read stays stored, until one with its name or its device ID takes its place.
-    this.unreadableDevices = getUnreadableDevices(this.unreadableDevices, this.devices);
-    await this.setupStore.write({ account: this.account, devices: [...this.devices, ...this.unreadableDevices] });
+    const unreadableDevices = getUnreadableDevices(this.unreadableDevices, this.devices);
+    await this.setupStore.write({ account: this.account, devices: [...this.devices, ...unreadableDevices] });
+    this.unreadableDevices = unreadableDevices;
+  }
+
+  // Left out, the account is forgotten. A write that fails puts the account back, so that it changes nothing. The account is taken first, so that a session it refreshes during the write is stored too.
+  private async storeAccount(account?: TuyaAccountConfig): Promise<void> {
+    const previous = this.account;
+    this.account = account;
+    try {
+      await this.storeSetup();
+    } catch (error) {
+      this.account = previous;
+      throw error;
+    }
   }
 
   /**
@@ -1019,7 +1044,13 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private async reconcile(devices: TuyaDeviceConfig[]): Promise<void> {
     const previous = this.devices;
     this.devices = devices;
-    await this.storeSetup();
+    try {
+      await this.storeSetup();
+    } catch (error) {
+      // Nothing was started or stopped: what runs still matches the list of before, which stays stored.
+      this.devices = previous;
+      throw error;
+    }
     for (const device of previous) {
       if (!this.devices.some((candidate) => candidate.deviceId === device.deviceId)) await this.stopDevice(device);
     }

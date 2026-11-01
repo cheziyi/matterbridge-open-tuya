@@ -881,8 +881,11 @@ describe('TuyaPlatform', () => {
     writeSetup.mockRejectedValueOnce(new Error('disk full'));
     const bench = await storedDevice(benchId);
     if (bench === undefined) throw new Error('No bench');
-    await expect(platform.saveDevice(bench)).rejects.toThrow('disk full');
+    // A removal that cannot be stored leaves the device listed and running.
+    await expect(platform.removeDevice(bench.deviceId)).rejects.toThrow('disk full');
     expect(log.error).toHaveBeenCalledWith('A change to the devices failed: disk full');
+    expect(log.info).not.toHaveBeenCalledWith(`"${bench.name}" stopped`);
+    expect((await platform.getSetupState()).devices.some((device) => device.deviceId === benchId)).toBe(true);
     const storage = platform.context;
     if (storage === undefined) throw new Error('No storage');
     vi.spyOn(storage, 'set').mockRejectedValueOnce(new Error('read-only'));
@@ -1116,9 +1119,11 @@ describe('TuyaPlatform', () => {
       await platform.saveDevice(plug(nodeDeviceId, 'Zigbee', behind));
       expect(createLocalTuyaClient).not.toHaveBeenCalled();
       expect(client.close).not.toHaveBeenCalled();
-      // Still not heard, the client built at the host given stays.
+      // A reconnection asked for builds a new connection, still not heard, at the host it had.
       await platform.reconnectDevice(nodeDeviceId);
-      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: unheard, host: '10.0.0.9', version: '3.4' }));
+      expect(client.close).toHaveBeenCalled();
       await stopPlatform();
     });
 
@@ -1180,11 +1185,87 @@ describe('TuyaPlatform', () => {
       await platform.unregisterAllDevices();
     });
 
-    test('should keep an account it took when storing it fails', async () => {
-      await startPlatform();
+    test('should stay on the account it has when a new one or a sign out cannot be stored', async () => {
+      const cloud = await startPlatform();
       writeSetup.mockRejectedValueOnce(new Error('disk full'));
       await expect(platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' })).rejects.toThrow('disk full');
+      expect((net.accounts.at(-1) as unknown as { close: Mock }).close).toHaveBeenCalled();
+      expect((await platform.getSetupState()).account).toMatchObject({ type: 'smartLife' });
+      writeSetup.mockRejectedValueOnce(new Error('disk full'));
+      await expect(platform.signOut()).rejects.toThrow('disk full');
+      expect((cloud as unknown as { close: Mock }).close).not.toHaveBeenCalled();
+      expect((await platform.getSetupState()).account).toMatchObject({ type: 'smartLife' });
+      await stopPlatform();
+    });
+
+    test('should log stored data it cannot read', async () => {
+      vi.spyOn(SetupStore.prototype, 'read').mockImplementationOnce(async (report) => {
+        report('The stored Tuya account and devices cannot be read: using the copy from the write before');
+        return Promise.resolve({});
+      });
+      platform = await createStoredPlatform({ account, devices: [] });
+      addMatterbridge(platform);
+      await platform.onStart('test');
+      expect(log.warn).toHaveBeenCalledWith('The stored Tuya account and devices cannot be read: using the copy from the write before');
+      expect((await platform.getSetupState()).devices).toEqual([]);
+      await stopPlatform();
+    });
+
+    test('should keep an account it took when the devices fail to reconnect through it', async () => {
+      await startPlatform();
+      vi.spyOn(platform as unknown as { reconnectAll: () => Promise<void> }, 'reconnectAll').mockRejectedValueOnce(new Error('stuck'));
+      await expect(platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' })).rejects.toThrow('stuck');
       expect((net.accounts.at(-1) as unknown as { close: Mock }).close).not.toHaveBeenCalled();
+      expect((await platform.getSetupState()).account).toMatchObject({ type: 'developer' });
+      await stopPlatform();
+    });
+
+    test('should store a session refreshed while the platform shuts down', async () => {
+      await startPlatform();
+      const closing = net.accounts.at(-1) as unknown as { close: Mock };
+      const refreshed = { ...session, refreshToken: 'refreshed' };
+      closing.close.mockImplementationOnce(async () => {
+        net.sessionChange?.(refreshed);
+        return Promise.resolve();
+      });
+      const storage = platform.context;
+      if (storage === undefined) throw new Error('No storage');
+      const set = vi.spyOn(storage, 'set');
+      await platform.onShutdown('test');
+      expect(set).toHaveBeenCalledWith('setup', expect.objectContaining({ account: expect.objectContaining({ session: refreshed }) }));
+      expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('could not be stored'));
+      await platform.unregisterAllDevices();
+    });
+
+    test('should keep a device on its gateway when the cloud withholds its key or does not list the gateway', async () => {
+      const shared = 'bf00000000000000gw78';
+      const stayingId = 'bf0000000000000078aa';
+      const node = 'a4c1380000000078';
+      const cloud = await startPlatform([plug(stayingId, 'Staying', { nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' })]);
+      cloud.listDevices.mockResolvedValueOnce([createCloudDevice(plugFile, { deviceId: stayingId, name: 'Staying', nodeId: node, localKey: undefined })]);
+      await platform.syncDevices();
+      expect(await storedDevice(stayingId)).toMatchObject({ nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' });
+      cloud.listDevices.mockResolvedValueOnce([createCloudDevice(plugFile, { deviceId: stayingId, name: 'Staying', nodeId: node, localKey: 'gatewaykey000001' })]);
+      await platform.syncDevices();
+      expect(await storedDevice(stayingId)).toMatchObject({ nodeId: node, gatewayId: shared });
+      await stopPlatform();
+    });
+
+    test('should build a new connection to a gateway when a device behind it is reconnected, and reconnect the others', async () => {
+      const shared = 'bf00000000000000gw79';
+      const behind = (node: string): Partial<TuyaDeviceConfig> => ({ nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' });
+      await startPlatform([plug(deskId, 'Desk', behind('a4c1380000000079')), plug(benchId, 'Bench', behind('a4c1380000000080'))]);
+      await platform.hearDevice({ deviceId: shared, host: '192.168.1.79', version: '3.3', productKey: 'x' });
+      await vi.waitFor(() => expect(routeOf(net.lan, shared)).toBeDefined());
+      const client = routeOf(net.lan, shared);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      expect(await platform.reconnectDevice(deskId)).toBe(true);
+      expect(update).toHaveBeenCalledTimes(2);
+      // One new connection serves both.
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(client.close).toHaveBeenCalled();
+      update.mockRestore();
       await stopPlatform();
     });
 
