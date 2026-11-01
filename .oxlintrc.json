@@ -23,7 +23,8 @@
     "**/temp/**",
     "**/tmp/**",
     "**/package-lock.json",
-    "**/bun.lock"
+    "**/bun.lock",
+    "apps/**" // The setup page is a page without a framework with a config and a lint script of its own: see apps/frontend.
   ],
   "env": {
     "builtin": true,

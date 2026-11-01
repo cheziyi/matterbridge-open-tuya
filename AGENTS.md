@@ -12,7 +12,7 @@
 - Keep changes minimal and scoped to the request. Avoid unrelated refactors or broad cleanup.
 - Do not modify production code only to make a test pass. If a failing test points to a likely source issue, explain the issue and change behavior only when required by the task.
 - Preserve cross-platform behavior. Changes must work on Windows, macOS, and Linux, especially for paths, shell commands, environment variables, and networking behavior.
-- Maintain compatibility with the supported Node.js versions in this repository: 22.13, 24 and 26.
+- Maintain compatibility with the supported Node.js versions in this repository: 22.13 and later 22.x, 24 and 26. Node.js 20 is not supported, because open-tuya needs Node.js 22.12 or later.
 
 ## Project Architecture
 

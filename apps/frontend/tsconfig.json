@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "lib": ["es2022", "dom", "dom.iterable"],
+    "module": "es2022",
+    "moduleResolution": "bundler",
+    "strict": true,
+    "noImplicitOverride": true,
+    "skipLibCheck": true,
+    // tsc only checks the types: build.mjs bundles the page with esbuild.
+    "noEmit": true,
+    "types": []
+  },
+  "include": ["src/**/*.ts"],
+  // src/api.ts takes its types from the plugin, which this reads from the plugin's build: run `npm run build` there first.
+  "references": [{ "path": "../../tsconfig.build.json" }]
+}

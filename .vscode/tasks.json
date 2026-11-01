@@ -295,14 +295,6 @@
       "problemMatcher": []
     },
     {
-      "label": "Npm Downloads",
-      "detail": "Run Npm Downloads Script",
-      "type": "shell",
-      "command": "node",
-      "args": ["scripts/downloads.mjs"],
-      "problemMatcher": []
-    },
-    {
       "label": "Remove Workflows",
       "detail": "Run Remove Workflows Script",
       "type": "shell",

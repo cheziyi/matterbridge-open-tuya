@@ -1,8 +1,7 @@
 {
-  "name": "matterbridge-plugin-template",
+  "name": "matterbridge-open-tuya",
   "type": "DynamicPlatform",
-  "whiteList": [],
-  "blackList": [],
+  "pollIntervalInSeconds": 30,
   "debug": false,
   "unregisterOnShutdown": false
 }

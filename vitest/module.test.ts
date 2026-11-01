@@ -1,10 +1,10 @@
 /**
  * @file vitest/module.test.ts
- * @description This file contains the tests for the plugin template.
- * @author Luca Liguori
+ * @description This file contains the tests for the Tuya platform.
+ * @author Calvin Che
  */
 
-/* oxlint-disable vitest/no-conditional-expect */
+/* oxlint-disable unicorn/no-useless-undefined */
 
 /**
  * WARNING!!!
@@ -12,189 +12,1446 @@
  * Is not possible for timing reasons to create and destroy a Matter node each test to keep isolation.
  */
 
-import path from 'node:path';
+import type { MatterbridgeEndpoint } from 'matterbridge';
+import { BridgedDeviceBasicInformation, OnOff } from 'matterbridge/matter/clusters';
+import { log, setupTest } from 'matterbridge/test-utils/vitest';
+import { addMatterbridge, createServerNode, createTestEnvironment, getMatterbridge, startServerNode, stopServerNode } from 'matterbridge/test-utils/vitest/matter';
+import { type AppCloudSession, type DataPoints, type DiscoveredTuyaDevice, type TuyaCloudDevice, type TuyaDeviceModel, TuyaError } from 'open-tuya';
+import type { Mock } from 'vitest';
 
-import type { MatterbridgeEndpoint, PlatformMatterbridge } from 'matterbridge';
-import { AnsiLogger, LogLevel } from 'matterbridge/logger';
-import type { ActionContext } from 'matterbridge/matter';
-import { VendorId } from 'matterbridge/matter';
-import { OnOff, Thermostat } from 'matterbridge/matter/clusters';
+import { TuyaAccessory } from '../src/accessory/tuyaAccessory.js';
+import type { TuyaDeviceConfig } from '../src/config.js';
+import initializePlugin, { deviceSyncIntervalInMs, smartLifeClientId, smartLifeSchema, TuyaPlatform, type TuyaPlatformConfig } from '../src/module.js';
+import { SetupStore, type StoredSetup } from '../src/platform/setupStore.js';
+import {
+  createCloudDevice,
+  createDeviceConfig,
+  createFakeRoute,
+  createModelDeviceConfig,
+  type FakeRoute,
+  leakFile,
+  lightFile,
+  motionModel,
+  motionProductKey,
+  plugFile,
+  productKeyOf,
+  stripFile,
+} from './fakeTuya.js';
 
-import { TemplatePlatform, type TemplatePlatformConfig } from '../src/module.js';
+// What the mocked SDK reaches: the devices on the LAN and in the cloud, which the test body sets up.
+const net = vi.hoisted(() => ({
+  /** The data points each device reports, on the LAN and through the cloud alike, by its device ID or its node ID. */
+  dataPoints: new Map<string, Record<string, boolean | number | string>>(),
+  /** The routes the platform created on the LAN, by device ID, the last first. */
+  lan: new Map<string, unknown>(),
+  /** The routes the platform created through the cloud, by device ID. */
+  cloud: new Map<string, unknown>(),
+  /** The options of each LAN client the platform created. */
+  lanOptions: [] as Record<string, unknown>[],
+  onDevice: undefined as ((found: DiscoveredTuyaDevice) => void) | undefined,
+  discoveryFails: false,
+  discoveryClose: undefined as unknown,
+  /** What the cloud account lists. */
+  listed: [] as TuyaCloudDevice[],
+  /** The cloud's model of each device, by its device ID: none describes a device not in it. */
+  models: new Map<string, TuyaDeviceModel>(),
+  accounts: [] as Record<string, unknown>[],
+  sessionChange: undefined as ((session: AppCloudSession) => void) | undefined,
+  qr: undefined as unknown,
+}));
 
-const mockMatterbridge: PlatformMatterbridge = {
-  systemInformation: {
-    interfaceName: 'eth0',
-    macAddress: 'aa:bb:cc:dd:ee:ff',
-    ipv4Address: '192.168.1.1',
-    ipv6Address: 'fd78:cbf8:4939:746:a96:8277:346f:416e',
-    osRelease: 'x.y.z',
-    nodeVersion: '22.10.0',
-    hostname: 'matterbridge',
-    user: 'jest',
-    osType: 'Linux',
-    osPlatform: 'linux',
-    osArch: 'x64',
-    totalMemory: '0 B',
-    freeMemory: '0 B',
-    constrainedMemory: '0 B',
-    systemUptime: '0s',
-    processUptime: '0s',
-    cpuUsage: '0%',
-    processCpuUsage: '0%',
-    rss: '0 B',
-    heapTotal: '0 B',
-    heapUsed: '0 B',
-  },
-  uuid: '00000000-0000-0000-0000-000000000000',
-  rootDirectory: path.join('.cache', 'vitest', 'TemplatePlugin'),
-  homeDirectory: path.join('.cache', 'vitest', 'TemplatePlugin'),
-  matterbridgeDirectory: path.join('.cache', 'vitest', 'TemplatePlugin', '.matterbridge'),
-  matterbridgePluginDirectory: path.join('.cache', 'vitest', 'TemplatePlugin', 'Matterbridge'),
-  matterbridgeCertDirectory: path.join('.cache', 'vitest', 'TemplatePlugin', '.mattercert'),
-  globalModulesDirectory: path.join('.cache', 'vitest', 'TemplatePlugin', 'node_modules'),
-  matterbridgeVersion: '3.11.0',
-  matterbridgeLatestVersion: '3.11.0',
-  matterbridgeDevVersion: '3.11.0',
-  frontendVersion: '3.0.0',
-  bridgeMode: 'bridge',
-  restartMode: 'docker',
-  virtualMode: 'mounted_switch',
-  aggregatorVendorId: VendorId(0xfff1),
-  aggregatorVendorName: 'Matterbridge',
-  aggregatorProductId: 0x8000,
-  aggregatorProductName: 'Matterbridge Vitest Aggregator',
-};
+vi.mock('open-tuya', async (importOriginal) => {
+  const original = await importOriginal<typeof import('open-tuya')>();
+  const { createFakeRoute: fakeRoute } = await import('./fakeTuya.js');
+  /**
+   * Create the route of a device or a node, which reads its data points from `net`
+   *
+   * @param {string} id The device ID or the node ID.
+   * @param {Map<string, unknown>} routes Where the route is kept for the test.
+   * @returns {FakeRoute} The route.
+   */
+  const routeTo = (id: string, routes: Map<string, unknown>): FakeRoute => {
+    const route = fakeRoute();
+    route.readDataPoints.mockImplementation(async () => {
+      const dataPoints = net.dataPoints.get(id);
+      if (dataPoints === undefined) throw new original.TuyaError('CONNECTION_FAILED', `${id} does not answer`);
+      return Promise.resolve({ ...dataPoints });
+    });
+    routes.set(id, route);
+    return route;
+  };
+  const createAccount = (options: Record<string, unknown>): unknown => {
+    const account = {
+      options,
+      listDevices: vi.fn(async () => Promise.resolve(net.listed)),
+      createClient: vi.fn(async (deviceId: string) => Promise.resolve(routeTo(deviceId, net.cloud))),
+      readDeviceModel: vi.fn(async (deviceId: string) => Promise.resolve(net.models.get(deviceId) ?? {})),
+      close: vi.fn(async () => Promise.resolve()),
+    };
+    net.accounts.push(account);
+    return account;
+  };
+  return {
+    ...original,
+    discoverDevices: vi.fn(async (options: { onDevice?: (found: DiscoveredTuyaDevice) => void }) => {
+      if (net.discoveryFails) throw new original.TuyaError('DISCOVERY_FAILED', 'port 6667 is held');
+      net.onDevice = options.onDevice;
+      const discovery = { devices: new Map(), close: vi.fn(async () => Promise.resolve()) };
+      net.discoveryClose = discovery.close;
+      return Promise.resolve(discovery);
+    }),
+    createLocalTuyaClient: vi.fn((options: Record<string, unknown>) => {
+      net.lanOptions.push(options);
+      const deviceId = String(options.deviceId);
+      if (options.localKey === 'badkey') throw new RangeError('The local key is not 16 bytes');
+      const route = routeTo(deviceId, net.lan) as FakeRoute & { createClient: (nodeId: string) => FakeRoute };
+      route.createClient = (nodeId: string): FakeRoute => {
+        if (nodeId === 'refused') throw new TypeError('A 3.1 gateway reaches no device behind it');
+        return routeTo(nodeId, net.lan);
+      };
+      return route;
+    }),
+    createAppCloudAccount: vi.fn((options: Record<string, unknown>) => {
+      net.sessionChange = options.onSessionChange as (session: AppCloudSession) => void;
+      return createAccount(options);
+    }),
+    createDeveloperCloudAccount: vi.fn((options: Record<string, unknown>) => createAccount(options)),
+    createQrLogin: vi.fn(() => net.qr),
+  };
+});
 
-const mockLog = {
-  fatal: vi.fn((message: string, ...parameters: any[]) => {}),
-  error: vi.fn((message: string, ...parameters: any[]) => {}),
-  warn: vi.fn((message: string, ...parameters: any[]) => {}),
-  notice: vi.fn((message: string, ...parameters: any[]) => {}),
-  info: vi.fn((message: string, ...parameters: any[]) => {}),
-  debug: vi.fn((message: string, ...parameters: any[]) => {}),
-} as unknown as AnsiLogger;
+const { createAppCloudAccount, createDeveloperCloudAccount, createLocalTuyaClient, createQrLogin, discoverDevices } = await import('open-tuya');
 
-const mockConfig: TemplatePlatformConfig = {
-  name: 'matterbridge-plugin-template',
-  type: 'DynamicPlatform',
-  version: '1.0.0',
-  whiteList: [],
-  blackList: [],
-  debug: false,
-  unregisterOnShutdown: false,
-};
+/** A cloud account of the mocked SDK, whose device list a test holds back. */
+interface ListingCloud {
+  listDevices: Mock<() => Promise<TuyaCloudDevice[]>>;
+}
 
-// Mocked methods
-const addBridgedEndpoint = vi.fn(async (pluginName: string, device: MatterbridgeEndpoint) => {});
-const removeBridgedEndpoint = vi.fn(async (pluginName: string, device: MatterbridgeEndpoint) => {});
-const removeAllBridgedEndpoints = vi.fn(async (pluginName: string) => {});
-const registerVirtualDevice = vi.fn(async (name: string, type: 'light' | 'outlet' | 'switch' | 'mounted_switch', callback: () => Promise<void>) => {});
+const pluginName = 'matterbridge-open-tuya';
+const session: AppCloudSession = { endpoint: 'https://apigw.tuyaeu.com', accessToken: 'access', refreshToken: 'refresh', expiresAtInMs: Date.now() + 3_600_000 };
+const account = { type: 'smartLife' as const, userCode: 'abc123', session };
+const plugDataPoints = { '1': true, '2': 0, '4': 53, '5': 123, '6': 2305 };
 
-// Mock the logger
-const loggerLogSpy = vi.spyOn(AnsiLogger.prototype, 'log').mockImplementation((level: string, message: string, ...parameters: any[]) => {});
+const deskId = 'bf0000000000000001aa';
+const benchId = 'bf0000000000000002aa';
+const gatewayId = 'bf00000000000000gw01';
+const nodeDeviceId = 'a4c13800000000000001';
+const nodeId = 'a4c1380000000001';
+const lightId = 'bf0000000000000003aa';
+const motionId = 'bf0000000000000004aa';
 
-describe('Matterbridge Plugin Template', () => {
-  let instance: TemplatePlatform;
+const desk = createDeviceConfig(plugFile, { deviceId: deskId, name: 'Desk', localKey: '0123456789abcdef' });
+const listedDesk = createCloudDevice(plugFile, { deviceId: deskId, name: 'Desk plug' });
+const listedGateway = createCloudDevice(plugFile, { deviceId: gatewayId, name: 'Hub', productKey: 'gatewayproduct00', localKey: 'gatewaykey000001', category: 'wg2' });
+const listedNode = createCloudDevice(plugFile, { deviceId: nodeDeviceId, name: 'Zigbee plug', nodeId, localKey: 'gatewaykey000001' });
+const listedLight = createCloudDevice(lightFile, { deviceId: lightId, name: 'Path lights', category: 'dj' });
+const listedBench = createCloudDevice(stripFile, { deviceId: benchId, name: 'Bench strip', category: 'pc' });
+
+/**
+ * Build the platform configuration
+ *
+ * @param {Partial<TuyaPlatformConfig>} overrides The fields to replace.
+ * @returns {TuyaPlatformConfig} The configuration.
+ */
+function createConfig(overrides: Partial<TuyaPlatformConfig> = {}): TuyaPlatformConfig {
+  return { name: pluginName, type: 'DynamicPlatform', version: '0.1.0', debug: false, unregisterOnShutdown: false, ...overrides };
+}
+
+/**
+ * Get the route the platform created to a device
+ *
+ * @param {Map<string, unknown>} routes The routes on the LAN or through the cloud.
+ * @param {string} id The device ID or the node ID.
+ * @returns {FakeRoute} The route.
+ * @throws {Error} When the platform created none.
+ */
+function routeOf(routes: Map<string, unknown>, id: string): FakeRoute {
+  const route = routes.get(id);
+  if (route === undefined) throw new Error(`No route to ${id}`);
+  return route as FakeRoute;
+}
+
+/**
+ * Hear a device on the LAN, as the discovery does when it broadcasts
+ *
+ * @param {string} deviceId The device ID.
+ * @param {string} host Its address.
+ * @returns {Promise<void>} Resolves once the platform had the time to take it in.
+ */
+async function hear(deviceId: string, host: string): Promise<void> {
+  net.onDevice?.({ deviceId, host, version: '3.3', productKey: productKeyOf(plugFile) });
+  // The platform takes a broadcast in on its own: a turn of the event loop lets it.
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}
+
+await setupTest('TuyaPlatform', false);
+
+describe('TuyaPlatform', () => {
+  const matterbridge = { ...getMatterbridge(), bridgeMode: 'bridge' as const };
+  const writeSetup = vi.spyOn(SetupStore.prototype, 'write');
+  const restartRequired = vi.spyOn(TuyaPlatform.prototype, 'wssSendRestartRequired').mockImplementation(() => undefined);
+  let platform: TuyaPlatform;
+
+  /**
+   * Create a platform with an account and devices in its storage, in place of those left there
+   *
+   * @param {StoredSetup} [setup] What is stored.
+   * @param {Partial<TuyaPlatformConfig>} [overrides] The fields of the configuration to replace.
+   * @returns {Promise<TuyaPlatform>} The platform, not started yet.
+   */
+  async function createStoredPlatform(setup: StoredSetup = {}, overrides: Partial<TuyaPlatformConfig> = {}): Promise<TuyaPlatform> {
+    const created = initializePlugin(matterbridge, log, createConfig(overrides));
+    await created.ready;
+    await created.context?.set('setup', setup);
+    return created;
+  }
+
+  /**
+   * Read the stored devices of a platform
+   *
+   * @param {TuyaPlatform} from The platform.
+   * @param {string} deviceId The device ID.
+   * @returns {Promise<TuyaDeviceConfig | undefined>} The device, as last stored.
+   */
+  async function readStored(from: TuyaPlatform, deviceId: string): Promise<TuyaDeviceConfig | undefined> {
+    const setup: StoredSetup | undefined = await from.context?.get('setup');
+    return (setup?.devices as TuyaDeviceConfig[] | undefined)?.find((device) => device.deviceId === deviceId);
+  }
+
+  /**
+   * Wait until the queued changes and reads of the platform are done
+   *
+   * @returns {Promise<void>} Resolves after the pending work.
+   */
+  async function settle(): Promise<void> {
+    await platform.syncDevices();
+    await platform.pollDevices();
+  }
+
+  /**
+   * Find a registered device by the label the Matter apps show
+   *
+   * @param {string} label The label.
+   * @returns {MatterbridgeEndpoint | undefined} The device, when one has the label.
+   */
+  function byLabel(label: string): MatterbridgeEndpoint | undefined {
+    return platform.getDevices().find((device) => device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel') === label);
+  }
+
+  /**
+   * Get the stored device of a device ID
+   *
+   * @param {string} deviceId The device ID.
+   * @returns {Promise<TuyaDeviceConfig | undefined>} The device, as last stored.
+   */
+  async function storedDevice(deviceId: string): Promise<TuyaDeviceConfig | undefined> {
+    return readStored(platform, deviceId);
+  }
+
+  beforeAll(async () => {
+    await createTestEnvironment();
+    await createServerNode(6302);
+    await startServerNode();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
   });
 
-  afterAll(() => {
+  afterAll(async () => {
+    await stopServerNode();
     vi.restoreAllMocks();
   });
 
-  it('should throw an error if matterbridge is not the required version', () => {
-    expect(() => new TemplatePlatform({ ...mockMatterbridge, matterbridgeVersion: '2.0.0' }, mockLog, mockConfig)).toThrow(
-      'This plugin requires Matterbridge version >= "3.11.0". Please update Matterbridge from 2.0.0 to the latest version in the frontend.',
+  test('should throw an error if matterbridge is not the required version', () => {
+    expect(() => new TuyaPlatform({ ...matterbridge, matterbridgeVersion: '2.0.0' }, log, createConfig())).toThrow(
+      'This plugin requires Matterbridge version >= "3.10.10". Please update Matterbridge from 2.0.0 to the latest version in the frontend.',
     );
   });
 
-  it('should create an instance of the platform', async () => {
-    instance = (await import('../src/module.js')).default(mockMatterbridge, mockLog, mockConfig);
-    expect(instance).toBeInstanceOf(TemplatePlatform);
-    // @ts-expect-error Accessing private method for testing purposes
-    instance.setMatterNode(addBridgedEndpoint, removeBridgedEndpoint, removeAllBridgedEndpoints, registerVirtualDevice);
-    expect(instance.matterbridge).toBe(mockMatterbridge);
-    expect(instance.log).toBe(mockLog);
-    expect(instance.config).toBe(mockConfig);
-    expect(mockLog.info).toHaveBeenCalledWith('Initializing platform matterbridge-plugin-template...');
+  test('should warn of an account it cannot read, and say why the LAN is not listened to', async () => {
+    net.discoveryFails = true;
+    const signedOut = await createStoredPlatform({
+      account: { type: 'smartLife' },
+      devices: [createDeviceConfig(plugFile, { deviceId: 'bf0000000000000099aa', isCloudOnly: true })],
+    });
+    addMatterbridge(signedOut);
+    await signedOut.onStart();
+    expect(log.warn).toHaveBeenCalledWith('The stored Tuya account cannot be read: sign in again in the setup page');
+    expect(log.info).toHaveBeenCalledWith(`Starting platform ${pluginName} with reason: no reason provided...`);
+    const state = await signedOut.getSetupState();
+    expect(state.account).toBeUndefined();
+    expect(state.discoveryError).toBe('Another program holds a port the discovery of devices on the LAN listens on (port 6667 is held)');
+    // A device on the cloud alone has no route without an account: it runs, unreachable.
+    expect(state.devices[0]).toMatchObject({ status: 'offline', hasLan: false, error: expect.stringContaining('The device has no route') });
+    expect(state.devices[0]).not.toHaveProperty('localKey');
+    await expect(signedOut.listDevices()).rejects.toThrow('Sign in to your Tuya account first');
+    expect(await signedOut.probe(deskId)).toEqual({ status: 'signInRequired', deviceId: deskId, message: 'Sign in to your Tuya account first' });
+    // Nothing to sync without an account.
+    await signedOut.syncDevices();
+    await signedOut.onShutdown();
+    expect(log.info).toHaveBeenCalledWith(`Shutting down platform ${pluginName} with reason: no reason provided...`);
+    await signedOut.unregisterAllDevices();
+    net.discoveryFails = false;
   });
 
-  it('should start with no devices selected', async () => {
-    mockConfig.whiteList = ['No devices'];
-    await instance.onStart('Vitest');
-    expect(mockLog.info).toHaveBeenCalledWith('Starting platform matterbridge-plugin-template with reason: Vitest...');
-    await instance.onStart();
-    expect(mockLog.info).toHaveBeenCalledWith('Starting platform matterbridge-plugin-template with reason: no reason provided...');
-    expect(addBridgedEndpoint).not.toHaveBeenCalled();
+  test('should create the platform and report stored devices that are not valid, once the setup page or the start reads them', async () => {
+    platform = await createStoredPlatform({ account, devices: [desk, { name: 'Broken' }] }, { pollIntervalInSeconds: 20 });
+    expect(platform).toBeInstanceOf(TuyaPlatform);
+    addMatterbridge(platform);
+    expect(log.info).toHaveBeenCalledWith(`Initializing platform ${pluginName}...`);
+    expect(log.warn).not.toHaveBeenCalled();
+    expect(await platform.onFetch('GET', 'state')).toMatchObject({ ok: true, state: { devices: [{ name: 'Desk' }] } });
+    expect(log.warn).toHaveBeenCalledTimes(1);
   });
 
-  it('should start', async () => {
-    mockConfig.whiteList = [];
-    await instance.onStart('Vitest');
-    expect(mockLog.info).toHaveBeenCalledWith('Starting platform matterbridge-plugin-template with reason: Vitest...');
-    await instance.onStart();
-    expect(mockLog.info).toHaveBeenCalledWith('Starting platform matterbridge-plugin-template with reason: no reason provided...');
-    expect(addBridgedEndpoint).toHaveBeenCalledTimes(2);
+  test('should ignore a saved configuration before it is started', async () => {
+    await platform.onConfigChanged(createConfig());
+    expect(platform.getDevices()).toHaveLength(0);
   });
 
-  it('should call the command subscribe handlers', async () => {
-    for (const device of instance.getDevices()) {
-      if (device.hasClusterServer(OnOff)) {
-        await device.executeCommandHandler('on', {}, 'onOff', {} as any, device);
-        await device.executeCommandHandler('off', {}, 'onOff', {} as any, device);
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Command on called on cluster onOff');
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Command off called on cluster onOff');
+  test('should start the stored devices through the cloud while the LAN has not heard them', async () => {
+    net.listed = [listedDesk, listedGateway, listedNode, listedLight, listedBench];
+    net.dataPoints.set(deskId, plugDataPoints);
+    await platform.onStart('Vitest');
+    expect(log.info).toHaveBeenCalledWith(`Starting platform ${pluginName} with reason: Vitest...`);
+    expect(createAppCloudAccount).toHaveBeenCalledWith(expect.objectContaining({ clientId: smartLifeClientId, session }));
+    expect(discoverDevices).toHaveBeenCalled();
+    expect(platform.getDevices()).toHaveLength(1);
+    await vi.waitFor(() => expect(byLabel('Desk')?.getAttribute(OnOff, 'onOff')).toBe(true));
+    expect(createLocalTuyaClient).not.toHaveBeenCalled();
+    const state = await platform.getSetupState();
+    expect(state.account).toEqual({ type: 'smartLife', userCode: 'abc123', needsSignIn: false });
+    expect(state.devices[0]).toMatchObject({ name: 'Desk', status: 'online', route: 'cloud', hasLan: false, productName: 'SP111-A', needsRestart: false });
+    expect(state.devices[0]?.features?.outlets).toHaveLength(1);
+    expect(state.devices[0]).not.toHaveProperty('localKey');
+    await platform.onConfigure();
+    expect(log.info).toHaveBeenCalledWith(`Configuring platform ${pluginName}...`);
+    // The setup page reaches the platform through onFetch.
+    expect(await platform.onFetch('GET', 'state')).toMatchObject({ ok: true, state: { devices: [{ name: 'Desk' }] } });
+  });
 
-        const context = { fabric: undefined } as ActionContext;
-        device.emitCommand(OnOff, 'on', {}, context);
-        device.emitCommand(OnOff, 'off', {}, context);
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Command on executed on cluster onOff');
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Command off executed on cluster onOff');
-      }
-      if (device.hasClusterServer(Thermostat)) {
-        const offlineContext = { fabric: undefined } as ActionContext;
-        device.eventsOf('thermostat').systemMode$Changed?.emit(Thermostat.SystemMode.Off, Thermostat.SystemMode.Auto, offlineContext);
-        device.eventsOf('thermostat').occupiedCoolingSetpoint$Changed?.emit(27, 25, offlineContext);
-        device.eventsOf('thermostat').occupiedHeatingSetpoint$Changed?.emit(19, 21, offlineContext);
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Attribute systemMode changed offline from 1 to 0');
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Attribute occupiedCoolingSetpoint changed offline from 25 to 27');
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Attribute occupiedHeatingSetpoint changed offline from 21 to 19');
+  test('should give a device heard on the LAN a route there, and store the address', async () => {
+    await hear(deskId, '192.168.1.20');
+    await vi.waitFor(() => expect(createLocalTuyaClient).toHaveBeenCalled());
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: deskId, host: '192.168.1.20', version: '3.3', localKey: '0123456789abcdef' }));
+    await vi.waitFor(async () => expect((await platform.getSetupState()).devices[0]).toMatchObject({ route: 'lan', hasLan: true }));
+    expect(await platform.context?.get(`lan:${deskId}`)).toEqual({ host: '192.168.1.20', version: '3.3' });
+    // The same broadcast again changes nothing, and a device the platform does not store is noted but not kept.
+    vi.mocked(createLocalTuyaClient).mockClear();
+    // A running device is checked through its own client: a second one on the LAN would take its connection.
+    expect(await platform.probe(deskId)).toMatchObject({ status: 'ready', catalogFile: plugFile, route: 'lan' });
+    net.onDevice?.({ deviceId: deskId, host: '192.168.1.20', version: '3.3', productKey: 'x' });
+    net.onDevice?.({ deviceId: 'bf0000000000000077aa', host: '192.168.1.77', version: '3.4', productKey: 'x' });
+    await settle();
+    expect(createLocalTuyaClient).not.toHaveBeenCalled();
+    expect(await platform.context?.get('lan:bf0000000000000077aa')).toBeUndefined();
+  });
 
-        const onlineContext = { fabric: 1 } as ActionContext;
-        device.eventsOf('thermostat').systemMode$Changed?.emit(Thermostat.SystemMode.Off, Thermostat.SystemMode.Auto, onlineContext);
-        device.eventsOf('thermostat').occupiedCoolingSetpoint$Changed?.emit(27, 25, onlineContext);
-        device.eventsOf('thermostat').occupiedHeatingSetpoint$Changed?.emit(19, 21, onlineContext);
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Attribute systemMode changed online from 1 to 0');
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Attribute occupiedCoolingSetpoint changed online from 25 to 27');
-        expect(loggerLogSpy).toHaveBeenCalledWith(LogLevel.INFO, 'Attribute occupiedHeatingSetpoint changed online from 21 to 19');
-      }
+  test('should list the devices of the account, with whether the plugin controls each and the gateway of a device behind one', async () => {
+    await hear(gatewayId, '192.168.1.30');
+    const devices = await platform.listDevices();
+    const byId = new Map(devices.map((device) => [device.deviceId, device]));
+    expect(byId.get(deskId)).toMatchObject({ support: 'supported', isConfigured: true, hasLocalKey: true, lan: { host: '192.168.1.20', version: '3.3' } });
+    expect(byId.get(gatewayId)).toMatchObject({ support: 'gateway', isConfigured: false });
+    expect(byId.get(nodeDeviceId)).toMatchObject({ support: 'supported', nodeId, gatewayId, lan: { host: '192.168.1.30' } });
+    expect(byId.get(lightId)).toMatchObject({ support: 'otherKind' });
+    expect(byId.get(lightId)?.lan).toBeUndefined();
+    expect(JSON.stringify(devices)).not.toContain('gatewaykey000001');
+  });
+
+  test('should check a device behind a gateway through the client of the gateway', async () => {
+    net.dataPoints.set(nodeId, plugDataPoints);
+    const result = await platform.probe(nodeDeviceId);
+    expect(result).toMatchObject({ status: 'ready', catalogFile: plugFile, route: 'lan' });
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '192.168.1.30', localKey: 'gatewaykey000001' }));
+    expect(routeOf(net.lan, nodeId).readDataPoints).toHaveBeenCalled();
+    // No stored device is behind the gateway: its client does not keep the one connection the gateway holds.
+    const checked = routeOf(net.lan, gatewayId);
+    expect(checked.close).toHaveBeenCalled();
+    // Two checks at once share one client, which the last to end closes.
+    vi.mocked(createLocalTuyaClient).mockClear();
+    const results = await Promise.all([platform.probe(nodeDeviceId), platform.probe(nodeDeviceId)]);
+    expect(results.map((probed) => probed.status)).toEqual(['ready', 'ready']);
+    expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+    expect(routeOf(net.lan, gatewayId).close).toHaveBeenCalledTimes(1);
+  });
+
+  test('should check a device through the cloud alone when it is set to the cloud alone, and say a device the account no longer lists', async () => {
+    net.dataPoints.set(benchId, { '1': true, '2': false, '3': true, '4': false, '5': true });
+    expect((await platform.probe(benchId)).route).toBe('cloud');
+    expect(await platform.probe('bf0000000000000055aa')).toEqual({
+      status: 'failed',
+      deviceId: 'bf0000000000000055aa',
+      message: 'The Tuya account no longer lists the device: read the device list again',
+    });
+  });
+
+  test('should store a device the setup page saves, with what the cloud lists of it', async () => {
+    // The page never sees the local key, the node or the gateway: they come from the list.
+    const fromPage = createDeviceConfig(plugFile, { deviceId: nodeDeviceId, name: 'Zigbee', localKey: undefined, nodeId: 'forged0000000000', gatewayId: 'forged0000000000' });
+    delete fromPage.localKey;
+    await platform.saveDevice(fromPage);
+    expect(writeSetup).toHaveBeenCalled();
+    expect(await storedDevice(nodeDeviceId)).toMatchObject({ localKey: 'gatewaykey000001', nodeId, gatewayId, cloudName: 'Zigbee plug', category: 'cz' });
+    expect(platform.getDevices()).toHaveLength(2);
+    await vi.waitFor(() => expect(byLabel('Zigbee')?.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(true));
+    const state = await platform.getSetupState();
+    expect(state.devices.find((device) => device.deviceId === nodeDeviceId)).toMatchObject({ status: 'online', route: 'lan', hasLan: true });
+  });
+
+  test('should refuse a name another device has, and a catalog entry the catalog does not have', async () => {
+    await expect(platform.saveDevice(createDeviceConfig(plugFile, { deviceId: nodeDeviceId, name: 'Desk' }))).rejects.toThrow('Another device is already named "Desk"');
+    await expect(platform.saveDevice(createDeviceConfig(plugFile, { deviceId: benchId, name: 'Bench', catalogFile: 'nothing.yaml' }))).rejects.toThrow(
+      'The device catalog has no entry from nothing.yaml',
+    );
+  });
+
+  test("should check a sensor the catalog does not list by the cloud's model of it, and store and start it by that model", async () => {
+    const listedMotion = createCloudDevice(leakFile, { deviceId: motionId, name: 'Landing sensor', productKey: motionProductKey, category: 'pir' });
+    net.listed.push(listedMotion);
+    net.models.set(motionId, motionModel);
+    net.dataPoints.set(motionId, { '1': 'pir', '4': 100, '7': 252, '10': '60s' });
+    expect(await platform.probe(motionId)).toMatchObject({ status: 'ready', model: motionModel, productName: 'Motion Sensor' });
+    // The page sends the model and the category, and the category is taken from the list.
+    const fromPage = createModelDeviceConfig({ deviceId: motionId, name: 'Landing', category: 'hps' });
+    delete fromPage.localKey;
+    await platform.saveDevice(fromPage);
+    expect(await storedDevice(motionId)).toMatchObject({ model: motionModel, category: 'pir', localKey: '0123456789abcdef' });
+    expect((await storedDevice(motionId))?.catalogFile).toBeUndefined();
+    await vi.waitFor(() => expect(byLabel('Landing')?.getAttribute(BridgedDeviceBasicInformation, 'reachable')).toBe(true));
+    await vi.waitFor(async () =>
+      expect((await platform.getSetupState()).devices.find((device) => device.deviceId === motionId)).toMatchObject({
+        productName: 'Motion Sensor',
+        values: { device: { motion: true, batteryInPercent: 100, temperatureInC: 25.2 } },
+      }),
+    );
+    // A running device is checked through its own client, and by the cloud's model of it as a new one is.
+    const cloud = net.accounts.at(-1) as { readDeviceModel: ReturnType<typeof vi.fn> };
+    cloud.readDeviceModel.mockClear();
+    expect(await platform.probe(motionId)).toMatchObject({ status: 'ready', model: motionModel, productName: 'Motion Sensor', route: 'cloud' });
+    expect(cloud.readDeviceModel).toHaveBeenCalledWith(motionId);
+    // A device the account does not list keeps no category from the page, and its model names nothing.
+    await expect(platform.saveDevice(createModelDeviceConfig({ deviceId: 'bf0000000000000077aa', name: 'Unlisted' }))).rejects.toThrow(
+      'No entry names the controls of the device from its model',
+    );
+    expect(await platform.removeDevice(motionId)).toBe(true);
+    net.listed.pop();
+  });
+
+  test('should rename a device in place, and build it again with new options at the next restart', async () => {
+    await platform.saveDevice({ ...desk, name: 'Lamp' });
+    expect(byLabel('Lamp')).toBeDefined();
+    expect(restartRequired).not.toHaveBeenCalled();
+    await platform.saveDevice({ ...desk, name: 'Lamp', hiddenFeatures: ['meter'] });
+    expect(restartRequired).toHaveBeenCalled();
+    expect(log.notice).toHaveBeenCalledWith('"Lamp" is built again with its new options at the next restart of Matterbridge: until then it keeps its current ones');
+    expect((await platform.getSetupState()).devices[0]?.needsRestart).toBe(true);
+  });
+
+  test('should reconnect a device set to the cloud alone, and one given a host', async () => {
+    await platform.saveDevice({ ...desk, name: 'Lamp', hiddenFeatures: ['meter'], isCloudOnly: true });
+    await vi.waitFor(async () => expect((await platform.getSetupState()).devices[0]).toMatchObject({ status: 'online', route: 'cloud', hasLan: false }));
+    // A device set to the cloud alone is checked through the cloud alone, and a running one through the client it has.
+    vi.mocked(createLocalTuyaClient).mockClear();
+    const cloud = net.accounts.at(-1) as { createClient: ReturnType<typeof vi.fn> };
+    cloud.createClient.mockClear();
+    expect(await platform.probe(deskId)).toMatchObject({ status: 'ready', route: 'cloud' });
+    expect(createLocalTuyaClient).not.toHaveBeenCalled();
+    expect(cloud.createClient).not.toHaveBeenCalled();
+    await platform.saveDevice({ ...desk, name: 'Lamp', hiddenFeatures: ['meter'], host: '10.0.0.5', version: '3.4' });
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: deskId, host: '10.0.0.5', version: '3.4' }));
+  });
+
+  test('should take a new local key from the device list, and reconnect the device with it', async () => {
+    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedLight, listedBench];
+    vi.mocked(createLocalTuyaClient).mockClear();
+    await platform.syncDevices();
+    expect(log.notice).toHaveBeenCalledWith('"Lamp" has a new local key');
+    expect((await storedDevice(deskId))?.localKey).toBe('fedcba9876543210');
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: deskId, localKey: 'fedcba9876543210' }));
+    // A list with nothing new stores nothing, nor one that leaves a stored device out.
+    writeSetup.mockClear();
+    await platform.syncDevices();
+    net.listed = [listedGateway, listedNode, { ...listedLight, category: '', localKey: undefined }, listedBench];
+    await platform.syncDevices();
+    expect(writeSetup).not.toHaveBeenCalled();
+    expect((await storedDevice(deskId))?.localKey).toBe('fedcba9876543210');
+    // A device the list gives no local key for keeps the stored one when the page saves it.
+    net.listed = [{ ...listedDesk, localKey: undefined }, listedGateway, listedNode, { ...listedLight, category: '', localKey: undefined }, listedBench];
+    await platform.syncDevices();
+    await platform.saveDevice({ ...desk, name: 'Lamp', hiddenFeatures: ['meter'], host: '10.0.0.5', version: '3.4' });
+    expect(await storedDevice(deskId)).toMatchObject({ localKey: 'fedcba9876543210', cloudName: 'Desk plug' });
+    // A device the cloud gives no local key is checked through the cloud alone.
+    net.dataPoints.set(lightId, {});
+    expect((await platform.probe(lightId)).status).toBe('unsupported');
+    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedLight, listedBench];
+    await platform.syncDevices();
+  });
+
+  test('should build the client of a gateway again when the devices behind it have a new local key', async () => {
+    const before = routeOf(net.lan, gatewayId);
+    net.listed = [
+      { ...listedDesk, localKey: 'fedcba9876543210' },
+      { ...listedGateway, localKey: 'gatewaykey000002' },
+      { ...listedNode, localKey: 'gatewaykey000002' },
+      listedLight,
+      listedBench,
+    ];
+    vi.mocked(createLocalTuyaClient).mockClear();
+    await platform.syncDevices();
+    expect(log.notice).toHaveBeenCalledWith('"Zigbee" has a new local key');
+    expect(await storedDevice(nodeDeviceId)).toMatchObject({ localKey: 'gatewaykey000002', gatewayId });
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '192.168.1.30', localKey: 'gatewaykey000002' }));
+    expect(before.close).toHaveBeenCalled();
+    await vi.waitFor(async () =>
+      expect((await platform.getSetupState()).devices.find((device) => device.deviceId === nodeDeviceId)).toMatchObject({ status: 'online', route: 'lan' }),
+    );
+    // Back to the key of before, for the tests that follow.
+    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedLight, listedBench];
+    await platform.syncDevices();
+    expect((await storedDevice(nodeDeviceId))?.localKey).toBe('gatewaykey000001');
+  });
+
+  test('should log a device list the cloud does not give, and note an account the cloud no longer accepts', async () => {
+    const cloud = net.accounts.at(-1) as unknown as ListingCloud;
+    cloud.listDevices.mockRejectedValueOnce(new TuyaError('RATE_LIMITED', 'slow down'));
+    await platform.syncDevices();
+    expect(log.warn).toHaveBeenCalledWith('The devices of the Tuya account could not be read: The Tuya cloud was asked too often: wait a minute, then try again (slow down)');
+    cloud.listDevices.mockRejectedValueOnce(new TuyaError('SESSION_EXPIRED', 'sign in'));
+    await expect(platform.listDevices()).rejects.toThrow('sign in');
+    expect(log.warn).toHaveBeenCalledWith('The Tuya cloud no longer accepts the account: sign in again in the setup page');
+    expect((await platform.getSetupState()).account?.needsSignIn).toBe(true);
+    // A list read again takes the rejection back.
+    await platform.listDevices();
+    expect((await platform.getSetupState()).account?.needsSignIn).toBe(false);
+  });
+
+  test('should note an account the cloud no longer accepts from a poll, and from a check', async () => {
+    // The LAN does not answer, and the cloud refuses the account.
+    const lan = routeOf(net.lan, deskId);
+    const route = routeOf(net.cloud, deskId);
+    lan.readDataPoints.mockRejectedValue(new TuyaError('CONNECTION_FAILED', 'gone'));
+    route.readDataPoints.mockRejectedValue(new TuyaError('SESSION_EXPIRED', 'sign in'));
+    await platform.pollDevices();
+    expect((await platform.getSetupState()).account?.needsSignIn).toBe(true);
+    for (const answering of [lan, route]) {
+      answering.readDataPoints.mockReset();
+      answering.readDataPoints.mockResolvedValue(plugDataPoints);
+    }
+    const cloud = net.accounts.at(-1) as { createClient: ReturnType<typeof vi.fn> };
+    cloud.createClient.mockRejectedValueOnce(new TuyaError('SESSION_EXPIRED', 'sign in'));
+    net.dataPoints.delete(benchId);
+    expect((await platform.probe(benchId)).status).toBe('signInRequired');
+    net.dataPoints.set(benchId, { '1': true });
+    const account = net.accounts.at(-1) as unknown as ListingCloud;
+    account.listDevices.mockRejectedValueOnce(new TuyaError('SESSION_EXPIRED', 'sign in'));
+    expect(await platform.probe('bf0000000000000055aa')).toMatchObject({ status: 'signInRequired' });
+    await platform.listDevices();
+  });
+
+  test('should store each new session of the Smart Life cloud, and ignore one of an account replaced', async () => {
+    writeSetup.mockClear();
+    const refreshed = { ...session, refreshToken: 'refresh-2' };
+    net.sessionChange?.(refreshed);
+    expect(writeSetup).toHaveBeenCalled();
+    await vi.waitFor(async () => expect(await platform.context?.get('setup')).toMatchObject({ account: { session: refreshed } }));
+    expect((await platform.getSetupState()).account?.needsSignIn).toBe(false);
+    // A session that cannot be stored is logged: the cloud asked for it on its own, with no one to tell.
+    writeSetup.mockRejectedValueOnce(new Error('disk full'));
+    net.sessionChange?.(refreshed);
+    await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith('The new session of the Tuya account could not be stored: disk full'));
+    net.sessionChange?.(refreshed);
+    await platform.onConfigChanged(createConfig({ pollIntervalInSeconds: 20 }));
+  });
+
+  test('should apply a poll interval saved in the config editor, and leave the account and the devices as they are', async () => {
+    writeSetup.mockClear();
+    const timer = vi.spyOn(globalThis, 'setInterval');
+    await platform.onConfigChanged(createConfig({ pollIntervalInSeconds: 60 }));
+    expect(timer).toHaveBeenCalledWith(expect.any(Function), 60_000);
+    timer.mockClear();
+    await platform.onConfigChanged(createConfig({ pollIntervalInSeconds: 60 }));
+    expect(timer).not.toHaveBeenCalled();
+    timer.mockRestore();
+    expect(writeSetup).not.toHaveBeenCalled();
+    expect(platform.getDevices()).toHaveLength(2);
+  });
+
+  test('should sign out and keep the devices on the LAN', async () => {
+    const cloud = net.accounts.at(-1) as { close: ReturnType<typeof vi.fn> };
+    await platform.signOut();
+    expect(cloud.close).toHaveBeenCalled();
+    expect(log.notice).toHaveBeenCalledWith('Signed out of the Tuya account');
+    const state = await platform.getSetupState();
+    expect(state.account).toBeUndefined();
+    expect(platform.getDevices()).toHaveLength(2);
+    await vi.waitFor(async () =>
+      expect((await platform.getSetupState()).devices.find((device) => device.deviceId === nodeDeviceId)).toMatchObject({ status: 'online', route: 'lan' }),
+    );
+    // Without an account there is no device list to check a device from, even one the platform hears.
+    expect((await platform.probe(nodeDeviceId)).status).toBe('signInRequired');
+    // Without a list, a device saved keeps what the cloud listed of it before.
+    const zigbee = await storedDevice(nodeDeviceId);
+    if (zigbee === undefined) throw new Error('No Zigbee device');
+    await platform.saveDevice({ ...zigbee, name: 'Zigbee' });
+    expect(await storedDevice(nodeDeviceId)).toMatchObject({ localKey: 'gatewaykey000001', nodeId, gatewayId, cloudName: 'Zigbee plug' });
+  });
+
+  test('should sign in by QR code, and store the session the scan gives', async () => {
+    let scan: (value: AppCloudSession) => void = () => undefined;
+    net.qr = {
+      requestQrCode: vi.fn(async () => Promise.resolve('tuyaSmart--qrLogin?token=1')),
+      waitForScan: vi.fn(
+        async () =>
+          new Promise<AppCloudSession>((resolve) => {
+            scan = resolve;
+          }),
+      ),
+    };
+    const previousSessionChange = net.sessionChange;
+    expect(await platform.startQrLogin('abc123')).toEqual({ status: 'waiting', qrCode: 'tuyaSmart--qrLogin?token=1' });
+    expect(createQrLogin).toHaveBeenCalledWith({ clientId: smartLifeClientId, schema: smartLifeSchema, userCode: 'abc123' });
+    expect(platform.getQrLogin().status).toBe('waiting');
+    scan({ ...session, refreshToken: 'refresh-3' });
+    await vi.waitFor(() => expect(platform.getQrLogin()).toEqual({ status: 'signedIn' }));
+    expect(log.notice).toHaveBeenCalledWith('Signed in to the Smart Life cloud');
+    expect(await platform.context?.get('setup')).toMatchObject({ account: { type: 'smartLife', userCode: 'abc123', session: { refreshToken: 'refresh-3' } } });
+    await settle();
+    expect((await platform.getSetupState()).account).toEqual({ type: 'smartLife', userCode: 'abc123', needsSignIn: false });
+    // A session of the account signed in before is not stored over the new one.
+    writeSetup.mockClear();
+    previousSessionChange?.({ ...session, refreshToken: 'stale' });
+    expect(writeSetup).not.toHaveBeenCalled();
+  });
+
+  test('should say when a QR code expires or the sign in fails, and stop waiting when cancelled', async () => {
+    const waitForScan = vi.fn();
+    net.qr = { requestQrCode: vi.fn(async () => Promise.resolve('tuyaSmart--qrLogin?token=2')), waitForScan };
+    waitForScan.mockRejectedValueOnce(new TuyaError('QR_CODE_EXPIRED', 'The QR code expired'));
+    await platform.startQrLogin('abc123');
+    await vi.waitFor(() => expect(platform.getQrLogin().status).toBe('expired'));
+    waitForScan.mockRejectedValueOnce(new TuyaError('REQUEST_REJECTED', 'refused'));
+    await platform.startQrLogin('abc123');
+    await vi.waitFor(() => expect(platform.getQrLogin()).toEqual({ status: 'failed', message: 'refused' }));
+    expect(log.warn).toHaveBeenCalledWith('The sign in to the Smart Life cloud failed: refused');
+    // A wait that is cancelled says nothing more.
+    waitForScan.mockImplementationOnce(async (_qrCode: string, options: { signal: AbortSignal }) => {
+      await new Promise((resolve) => {
+        options.signal.addEventListener('abort', resolve);
+      });
+      throw new Error('aborted');
+    });
+    await platform.startQrLogin('abc123');
+    platform.cancelQrLogin();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(platform.getQrLogin()).toEqual({ status: 'idle' });
+    // A scan that comes in after a cancel changes nothing.
+    let scan: (value: AppCloudSession) => void = () => undefined;
+    waitForScan.mockImplementationOnce(
+      async () =>
+        new Promise<AppCloudSession>((resolve) => {
+          scan = resolve;
+        }),
+    );
+    await platform.startQrLogin('abc123');
+    platform.cancelQrLogin();
+    scan(session);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    expect(platform.getQrLogin()).toEqual({ status: 'idle' });
+  });
+
+  test('should give up on a QR code that is not scanned in time', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const waitForScan = vi.fn(async (_qrCode: string, options: { signal: AbortSignal }) => {
+        await new Promise((resolve) => {
+          options.signal.addEventListener('abort', resolve);
+        });
+        throw options.signal.reason;
+      });
+      net.qr = { requestQrCode: vi.fn(async () => Promise.resolve('tuyaSmart--qrLogin?token=3')), waitForScan };
+      await platform.startQrLogin('abc123');
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      expect(platform.getQrLogin()).toMatchObject({ status: 'expired' });
+    } finally {
+      vi.useRealTimers();
     }
   });
 
-  it('should configure', async () => {
-    await instance.onConfigure();
-    expect(mockLog.info).toHaveBeenCalledWith('Configuring platform matterbridge-plugin-template...');
-    expect(mockLog.info).toHaveBeenCalledWith(expect.stringContaining('Configuring device'));
+  test('should refuse a User Code the cloud does not take', async () => {
+    net.qr = { requestQrCode: vi.fn(async () => Promise.reject(new TuyaError('REQUEST_REJECTED', 'The cloud answered 1004: bad code'))), waitForScan: vi.fn() };
+    await expect(platform.startQrLogin('wrong1')).rejects.toThrow('The Smart Life cloud did not give a QR code: check the User Code. The cloud answered 1004: bad code');
   });
 
-  it('should change logger level', async () => {
-    await instance.onChangeLoggerLevel(LogLevel.DEBUG);
-    expect(mockLog.info).toHaveBeenCalledWith('onChangeLoggerLevel called with: debug');
+  test('should stop a sign in cancelled, or replaced, while it waits for its QR code', async () => {
+    const waitForScan = vi.fn(async () => new Promise(() => undefined));
+    const held: { answer: (qrCode: string) => void; fail: (error: Error) => void }[] = [];
+    const requestQrCode = vi.fn(
+      async () =>
+        new Promise<string>((resolve, reject) => {
+          held.push({ answer: resolve, fail: reject });
+        }),
+    );
+    net.qr = { requestQrCode, waitForScan };
+    // Cancelled, as a shutdown does too: the QR code that comes in afterwards is not shown or waited on.
+    const cancelled = platform.startQrLogin('abc123');
+    platform.cancelQrLogin();
+    held[0]?.answer('tuyaSmart--qrLogin?token=late');
+    expect(await cancelled).toEqual({ status: 'idle' });
+    expect(platform.getQrLogin()).toEqual({ status: 'idle' });
+    // A request cancelled that then fails has no one to tell.
+    const failing = platform.startQrLogin('abc123');
+    platform.cancelQrLogin();
+    held[1]?.fail(new Error('gone'));
+    expect(await failing).toEqual({ status: 'idle' });
+    // Replaced: only the last sign in goes on.
+    const first = platform.startQrLogin('abc123');
+    const second = platform.startQrLogin('abc123');
+    held[2]?.answer('tuyaSmart--qrLogin?token=first');
+    held[3]?.answer('tuyaSmart--qrLogin?token=second');
+    await first;
+    expect(await second).toEqual({ status: 'waiting', qrCode: 'tuyaSmart--qrLogin?token=second' });
+    expect(waitForScan).toHaveBeenCalledTimes(1);
+    expect(waitForScan).toHaveBeenCalledWith('tuyaSmart--qrLogin?token=second', expect.anything());
+    platform.cancelQrLogin();
   });
 
-  it('should shutdown', async () => {
-    await instance.onShutdown('Vitest');
-    expect(mockLog.info).toHaveBeenCalledWith('Shutting down platform matterbridge-plugin-template with reason: Vitest...');
-    expect(removeAllBridgedEndpoints).not.toHaveBeenCalled();
+  test('should sign in to the developer platform once it lists the devices of the project', async () => {
+    const request = { accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' as const };
+    vi.mocked(createDeveloperCloudAccount).mockImplementationOnce(() => {
+      const failing = { listDevices: vi.fn(async () => Promise.reject(new TuyaError('PERMISSION_DENIED', 'plan expired'))), close: vi.fn(async () => Promise.resolve()) };
+      return failing as never;
+    });
+    await expect(platform.signInDeveloper(request)).rejects.toThrow('The Tuya developer platform did not list the devices of the project');
+    await platform.signInDeveloper(request);
+    expect(createDeveloperCloudAccount).toHaveBeenCalledWith(request);
+    expect(log.notice).toHaveBeenCalledWith('Signed in to the Tuya developer platform with the project id');
+    // The account that listed the devices to check the project is kept, with its list: the cloud is not asked for them again.
+    const cloud = net.accounts.at(-1) as { listDevices: ReturnType<typeof vi.fn>; close: ReturnType<typeof vi.fn> };
+    expect(cloud.listDevices).toHaveBeenCalledTimes(1);
+    expect(cloud.close).not.toHaveBeenCalled();
+    await settle();
+    expect((await platform.getSetupState()).account).toEqual({ type: 'developer', accessId: 'id', dataCenter: 'eu', needsSignIn: false });
+    expect(await platform.context?.get('setup')).toMatchObject({ account: { type: 'developer', accessSecret: 'secret' } });
+    // The configuration goes to the config editor of Matterbridge, in the browser: no secret is in it.
+    expect(platform.config).not.toHaveProperty('account');
+    expect(platform.config).not.toHaveProperty('devices');
+  });
 
-    // Mock the unregisterOnShutdown behavior
-    mockConfig.unregisterOnShutdown = true;
-    await instance.onShutdown();
-    expect(mockLog.info).toHaveBeenCalledWith('Shutting down platform matterbridge-plugin-template with reason: no reason provided...');
-    expect(removeAllBridgedEndpoints).toHaveBeenCalled();
-    mockConfig.unregisterOnShutdown = false;
+  test('should restart with the addresses it heard, and reach the devices on the LAN at once', async () => {
+    await platform.onShutdown('restart');
+    expect(net.discoveryClose).toHaveBeenCalled();
+    await platform.unregisterAllDevices();
+    vi.mocked(createLocalTuyaClient).mockClear();
+    platform = initializePlugin(matterbridge, log, platform.config);
+    addMatterbridge(platform);
+    await platform.onStart('restart');
+    // The device given a host is reached there, the device behind the gateway through the gateway heard before.
+    await vi.waitFor(() => expect(createLocalTuyaClient).toHaveBeenCalledTimes(2));
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: deskId, host: '10.0.0.5' }));
+    expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '192.168.1.30' }));
+    expect(platform.getDevices()).toHaveLength(2);
+    await vi.waitFor(async () => expect((await platform.getSetupState()).devices[0]?.needsRestart).toBe(false));
+  });
+
+  test('should not start a device the catalog has no entry for, and not reach one on the LAN with a key it refuses', async () => {
+    const odd = await createStoredPlatform({
+      devices: [
+        createDeviceConfig(plugFile, { deviceId: 'bf0000000000000088aa', name: 'Gone', catalogFile: 'removed_plug.yaml' }),
+        createDeviceConfig(plugFile, { deviceId: 'bf0000000000000089aa', name: 'Odd', localKey: 'badkey', host: '10.0.0.9', version: '3.3' }),
+        createDeviceConfig(plugFile, { deviceId: 'bf0000000000000090aa', name: 'Node', nodeId: 'refused', gatewayId: 'bf00000000000000gw09', localKey: 'nodekey000000001' }),
+        createDeviceConfig(plugFile, { deviceId: 'bf0000000000000091aa', name: 'Far', nodeId: 'a4c1380000000091', gatewayId: 'bf00000000000000gw08', localKey: 'badkey' }),
+        createModelDeviceConfig({ deviceId: 'bf0000000000000092aa', name: 'Lamp', category: 'dj' }),
+      ],
+    });
+    addMatterbridge(odd);
+    await odd.onStart();
+    net.onDevice?.({ deviceId: 'bf00000000000000gw09', host: '10.0.0.10', version: '3.1', productKey: 'x' });
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith('bf0000000000000090aa cannot be reached on the LAN: A 3.1 gateway reaches no device behind it'));
+    net.onDevice?.({ deviceId: 'bf00000000000000gw08', host: '10.0.0.11', version: '3.3', productKey: 'x' });
+    await vi.waitFor(() => expect(log.warn).toHaveBeenCalledWith('The gateway bf00000000000000gw08 cannot be reached on the LAN: The local key is not 16 bytes'));
+    const state = await odd.getSetupState();
+    expect(state.devices[0]).toMatchObject({ status: 'stopped', error: expect.stringContaining('has no entry from removed_plug.yaml'), features: undefined });
+    expect(log.warn).toHaveBeenCalledWith('bf0000000000000089aa cannot be reached on the LAN: The local key is not 16 bytes');
+    expect(state.devices[4]).toMatchObject({ status: 'stopped', error: 'No entry names the controls of its model in the category dj: set the device up again in the setup page' });
+    expect(await odd.removeDevice('bf0000000000000088aa')).toBe(true);
+    await odd.onShutdown();
+    // The test aggregator unregisters every device of every platform at once: only those of this one go.
+    for (const device of odd.getDevices()) await odd.unregisterDevice(device);
+  });
+
+  test('should keep naming the controls of a running device by the entry it was built with, and take what is stored when the cloud lists nothing', async () => {
+    const edgeId = 'bf0000000000000060aa';
+    const bareId = 'bf0000000000000061aa';
+    net.dataPoints.set(edgeId, { ...plugDataPoints });
+    const edge = await createStoredPlatform({
+      devices: [
+        createDeviceConfig(plugFile, { deviceId: edgeId, name: 'Edge', host: '10.0.0.20', version: '3.3' }),
+        createDeviceConfig(plugFile, { deviceId: bareId, name: 'Bare', localKey: undefined, isCloudOnly: true }),
+        createDeviceConfig(plugFile, { deviceId: 'bf0000000000000062aa', name: 'Gone again', catalogFile: 'removed_plug.yaml' }),
+        createDeviceConfig(plugFile, { deviceId: 'bf0000000000000064aa', name: 'Gone cloud', catalogFile: 'removed_plug.yaml', isCloudOnly: true }),
+      ],
+    });
+    addMatterbridge(edge);
+    await edge.onStart();
+    const edgeEndpoint = (): MatterbridgeEndpoint | undefined => edge.getDevices().find((device) => device.getAttribute(BridgedDeviceBasicInformation, 'nodeLabel') === 'Edge');
+    const stored = async (deviceId: string): Promise<TuyaDeviceConfig | undefined> => readStored(edge, deviceId);
+    await vi.waitFor(() => expect(edgeEndpoint()?.getAttribute(OnOff, 'onOff')).toBe(true));
+
+    // A device stored without what the cloud lists keeps it so while the cloud lists nothing.
+    const bare = await stored(bareId);
+    if (bare === undefined) throw new Error('No bare device');
+    await edge.saveDevice({ ...bare, name: 'Bare too' });
+    expect(await stored(bareId)).toMatchObject({ name: 'Bare too' });
+    expect(await stored(bareId)).not.toHaveProperty('localKey');
+    expect(await stored(bareId)).not.toHaveProperty('cloudName');
+    expect(await stored(bareId)).not.toHaveProperty('category');
+
+    // A new catalog entry waits for the restart: until then the controls are named by the entry the endpoints were built from.
+    const before = await stored(edgeId);
+    if (before === undefined) throw new Error('No edge device');
+    net.dataPoints.set(edgeId, { ...plugDataPoints, '1': false });
+    await edge.saveDevice({ ...before, catalogFile: stripFile });
+    await vi.waitFor(() => expect(edgeEndpoint()?.getAttribute(OnOff, 'onOff')).toBe(false));
+    expect(restartRequired).toHaveBeenCalledTimes(1);
+    // A second change before the restart asks for it again, and notes the device once.
+    vi.mocked(log.notice).mockClear();
+    await edge.saveDevice({ ...before, catalogFile: stripFile, isComposed: true });
+    expect(restartRequired).toHaveBeenCalledTimes(2);
+    expect(log.notice).not.toHaveBeenCalledWith(expect.stringContaining('is built again with its new options'));
+
+    // A device with a route on the LAN follows a new address through the discovery: it needs no new client.
+    vi.mocked(createLocalTuyaClient).mockClear();
+    await edge.hearDevice({ deviceId: edgeId, host: '10.0.0.21', version: '3.3', productKey: 'x' });
+    expect(createLocalTuyaClient).not.toHaveBeenCalled();
+
+    // An account signed in starts again a device that could not start, and a list with no category and no local key adds neither.
+    const listed = net.listed;
+    const { localKey: _localKey, ...bareListed } = createCloudDevice(plugFile, { deviceId: bareId, name: 'Bare plug', category: '' });
+    net.listed = [bareListed, createCloudDevice(plugFile, { deviceId: 'bf0000000000000064aa', name: 'Gone cloud plug' })];
+    net.dataPoints.set('bf0000000000000064aa', plugDataPoints);
+    await edge.signInDeveloper({ accessId: 'edgeproject', accessSecret: 'secret', dataCenter: 'eu' });
+    expect((await edge.getSetupState()).devices[2]).toMatchObject({ status: 'stopped', error: expect.stringContaining('has no entry from removed_plug.yaml') });
+    await edge.syncDevices();
+    expect(await stored(bareId)).toMatchObject({ cloudName: 'Bare plug' });
+    expect(await stored(bareId)).not.toHaveProperty('category');
+    expect(await stored(bareId)).not.toHaveProperty('localKey');
+    // A stored device that does not run is checked like a new one: through the cloud alone when it is set to it.
+    vi.mocked(createLocalTuyaClient).mockClear();
+    expect(await edge.probe('bf0000000000000064aa')).toMatchObject({ status: 'ready', deviceId: 'bf0000000000000064aa', route: 'cloud' });
+    expect(createLocalTuyaClient).not.toHaveBeenCalled();
+    // A device the last list does not have is listed again, and a session the cloud refuses says to sign in again.
+    const cloud = net.accounts.at(-1) as unknown as ListingCloud;
+    cloud.listDevices.mockRejectedValueOnce(new TuyaError('SESSION_EXPIRED', 'The session expired'));
+    expect(await edge.probe('bf0000000000000063aa')).toMatchObject({ status: 'signInRequired', deviceId: 'bf0000000000000063aa' });
+    cloud.listDevices.mockRejectedValueOnce(new TuyaError('REQUEST_TIMED_OUT', 'The cloud did not answer'));
+    expect(await edge.probe('bf0000000000000063aa')).toMatchObject({ status: 'failed', deviceId: 'bf0000000000000063aa' });
+    net.listed = listed;
+    await edge.onShutdown();
+    for (const device of edge.getDevices()) await edge.unregisterDevice(device);
+  });
+
+  test('should log a device whose endpoints cannot be registered, and retry it', async () => {
+    const original = TuyaPlatform.prototype.registerDevice;
+    const unregister = vi.spyOn(TuyaPlatform.prototype, 'unregisterDevice');
+    // The strip is a device for each outlet: its first one registers, its second does not.
+    const register = vi
+      .spyOn(TuyaPlatform.prototype, 'registerDevice')
+      .mockImplementationOnce(async function (this: TuyaPlatform, endpoint: MatterbridgeEndpoint) {
+        return original.call(this, endpoint);
+      })
+      .mockRejectedValueOnce(new Error('taken'));
+    await platform.saveDevice(createDeviceConfig(stripFile, { deviceId: benchId, name: 'Bench', isComposed: false }));
+    expect(log.warn).toHaveBeenCalledWith('"Bench" could not be started and will be retried: taken');
+    expect(unregister).toHaveBeenCalledTimes(1);
+    expect((await platform.getSetupState()).devices.find((device) => device.deviceId === benchId)).toMatchObject({ status: 'stopped', error: 'taken' });
+    // The same failure again is not logged again.
+    vi.mocked(log.warn).mockClear();
+    register.mockRejectedValueOnce(new Error('taken'));
+    await platform.syncDevices();
+    expect(log.warn).not.toHaveBeenCalledWith('"Bench" could not be started and will be retried: taken');
+    register.mockRestore();
+    unregister.mockRestore();
+    await platform.syncDevices();
+    expect(byLabel('Bench')).toBeDefined();
+  });
+
+  test('should log a change that fails, and an address it cannot store', async () => {
+    writeSetup.mockRejectedValueOnce(new Error('disk full'));
+    const bench = await storedDevice(benchId);
+    if (bench === undefined) throw new Error('No bench');
+    // A removal that cannot be stored leaves the device listed and running.
+    await expect(platform.removeDevice(bench.deviceId)).rejects.toThrow('disk full');
+    expect(log.error).toHaveBeenCalledWith('A change to the devices failed: disk full');
+    expect(log.info).not.toHaveBeenCalledWith(`"${bench.name}" stopped`);
+    expect((await platform.getSetupState()).devices.some((device) => device.deviceId === benchId)).toBe(true);
+    const storage = platform.context;
+    if (storage === undefined) throw new Error('No storage');
+    vi.spyOn(storage, 'set').mockRejectedValueOnce(new Error('read-only'));
+    await platform.hearDevice({ deviceId: benchId, host: '192.168.1.40', version: '3.3', productKey: 'x' });
+    expect(log.debug).toHaveBeenCalledWith(`The address of ${benchId} could not be stored: read-only`);
+  });
+
+  test('should fire the poll and the sync on their timers', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      const restarted = await createStoredPlatform({}, { pollIntervalInSeconds: 10 });
+      addMatterbridge(restarted);
+      const poll = vi.spyOn(restarted, 'pollDevices');
+      const sync = vi.spyOn(restarted, 'syncDevices');
+      await restarted.onStart();
+      sync.mockClear();
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(poll).toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(deviceSyncIntervalInMs);
+      expect(sync).toHaveBeenCalled();
+      await restarted.onShutdown();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test('should remove a device and its endpoints, and forget its address', async () => {
+    expect(await platform.removeDevice('bf0000000000000055aa')).toBe(false);
+    expect(await platform.context?.get(`lan:${gatewayId}`)).toEqual({ host: '192.168.1.30', version: '3.3' });
+    expect(await platform.removeDevice(nodeDeviceId)).toBe(true);
+    expect(log.info).toHaveBeenCalledWith('"Zigbee" stopped');
+    // The desk, and the bench with a device of its own for each outlet.
+    expect(platform.getDevices()).toHaveLength(6);
+    expect(await platform.context?.get(`lan:${nodeDeviceId}`)).toBeUndefined();
+    // The gateway's address goes with the last device behind it.
+    expect(await platform.context?.get(`lan:${gatewayId}`)).toBeUndefined();
+  });
+
+  test('should change the log level, and shut down unregistering every device when it is set to', async () => {
+    await platform.onChangeLoggerLevel('debug' as never);
+    expect(log.info).toHaveBeenCalledWith('onChangeLoggerLevel called with: debug');
+    platform.config.unregisterOnShutdown = true;
+    await platform.onShutdown();
+    expect(platform.getDevices()).toHaveLength(0);
+    // A device heard after the shutdown is stored, and reconnects nothing.
+    await platform.hearDevice({ deviceId: deskId, host: '192.168.1.21', version: '3.3', productKey: 'x' });
+    expect(log.debug).not.toHaveBeenCalledWith(expect.stringContaining('could not be stored'));
+  });
+
+  describe('changes that overlap', () => {
+    const plug = (id: string, name: string, overrides: Partial<TuyaDeviceConfig> = {}): TuyaDeviceConfig => createDeviceConfig(plugFile, { deviceId: id, name, ...overrides });
+
+    /**
+     * Start a platform of its own, signed in with no device stored
+     *
+     * @param {TuyaDeviceConfig[]} devices The stored devices.
+     * @returns {Promise<ListingCloud>} The cloud account it signed in with.
+     */
+    async function startPlatform(devices: TuyaDeviceConfig[] = []): Promise<ListingCloud> {
+      net.listed = [];
+      platform = await createStoredPlatform({ account, devices });
+      addMatterbridge(platform);
+      await platform.onStart('test');
+      await settle();
+      vi.clearAllMocks();
+      return net.accounts.at(-1) as unknown as ListingCloud;
+    }
+
+    /**
+     * Shut the platform down and take its devices out of the server node
+     *
+     * @returns {Promise<void>} Resolves when no device of it is left.
+     */
+    async function stopPlatform(): Promise<void> {
+      await platform.onShutdown('test');
+      await platform.unregisterAllDevices();
+    }
+
+    /**
+     * Make the next read of the device list wait for the test
+     *
+     * @param {ListingCloud} cloud The cloud account.
+     * @returns {{ answer: (devices: TuyaCloudDevice[]) => void; fail: (error: Error) => void }} How the read ends.
+     */
+    function holdList(cloud: ListingCloud): { answer: (devices: TuyaCloudDevice[]) => void; fail: (error: Error) => void } {
+      const held = { answer: (_devices: TuyaCloudDevice[]): void => undefined, fail: (_error: Error): void => undefined };
+      cloud.listDevices.mockImplementationOnce(
+        async () =>
+          new Promise<TuyaCloudDevice[]>((resolve, reject) => {
+            held.answer = resolve;
+            held.fail = reject;
+          }),
+      );
+      return held;
+    }
+
+    test('should keep both of two devices saved at once', async () => {
+      await startPlatform();
+      await Promise.all([platform.saveDevice(plug(deskId, 'Desk')), platform.saveDevice(plug(benchId, 'Bench'))]);
+      expect((await storedDevice(deskId))?.name).toBe('Desk');
+      expect((await storedDevice(benchId))?.name).toBe('Bench');
+      expect(platform.getDevices()).toHaveLength(2);
+      await stopPlatform();
+    });
+
+    test('should keep a local key the device list stored just ahead of a save', async () => {
+      const cloud = await startPlatform([plug(deskId, 'Desk')]);
+      cloud.listDevices.mockResolvedValueOnce([{ ...listedDesk, localKey: 'fedcba9876543210' }]);
+      await Promise.all([platform.listDevices(), platform.saveDevice(plug(deskId, 'Lamp'))]);
+      expect(await storedDevice(deskId)).toMatchObject({ name: 'Lamp', localKey: 'fedcba9876543210' });
+      await stopPlatform();
+    });
+
+    test('should start nothing from a sync that ends during the shutdown', async () => {
+      const cloud = await startPlatform([plug(deskId, 'Desk')]);
+      const held = holdList(cloud);
+      const syncing = platform.syncDevices();
+      await vi.waitFor(() => expect(cloud.listDevices).toHaveBeenCalled());
+      await stopPlatform();
+      vi.mocked(createLocalTuyaClient).mockClear();
+      held.fail(new Error('closed'));
+      await syncing;
+      expect(platform.getDevices()).toHaveLength(0);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not be read'));
+      await expect(platform.saveDevice(plug(benchId, 'Bench'))).rejects.toThrow('The plugin is shutting down');
+    });
+
+    test('should not take the device list of an account replaced while it was read', async () => {
+      const cloud = await startPlatform([plug(deskId, 'Desk')]);
+      const held = holdList(cloud);
+      const reading = platform.listDevices();
+      await vi.waitFor(() => expect(cloud.listDevices).toHaveBeenCalled());
+      await platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' });
+      const replaced = net.accounts.at(-1) as unknown as ListingCloud;
+      replaced.listDevices.mockClear();
+      // The new account has a read of its own, and the read of the old one takes nothing from it.
+      const secondHeld = holdList(replaced);
+      const second = platform.listDevices();
+      expect(replaced.listDevices).toHaveBeenCalledTimes(1);
+      held.answer([{ ...listedDesk, localKey: 'oldaccountkey000' }]);
+      await expect(reading).rejects.toThrow('The Tuya account changed while its devices were read');
+      secondHeld.answer([]);
+      await second;
+      expect((await storedDevice(deskId))?.localKey).toBe('0123456789abcdef');
+      // A read of an account replaced that fails says nothing about the new one.
+      const first = holdList(replaced);
+      const failing = platform.listDevices();
+      await vi.waitFor(() => expect(replaced.listDevices).toHaveBeenCalledTimes(2));
+      await platform.signOut();
+      first.fail(new TuyaError('SESSION_EXPIRED', 'gone'));
+      await expect(failing).rejects.toThrow('gone');
+      expect((await platform.getSetupState()).account).toBeUndefined();
+      expect(log.warn).not.toHaveBeenCalledWith('The Tuya cloud no longer accepts the account: sign in again in the setup page');
+      await stopPlatform();
+    });
+
+    test('should not apply a list read just before a sign out queued ahead of it', async () => {
+      const cloud = await startPlatform([plug(deskId, 'Desk')]);
+      const held = holdList(cloud);
+      const reading = platform.listDevices();
+      await vi.waitFor(() => expect(cloud.listDevices).toHaveBeenCalled());
+      held.answer([{ ...listedDesk, localKey: 'oldaccountkey000' }]);
+      const out = platform.signOut();
+      await Promise.allSettled([reading, out]);
+      expect((await storedDevice(deskId))?.localKey).toBe('0123456789abcdef');
+      await stopPlatform();
+    });
+
+    test('should reach a gateway at the host given for a device behind it, and at a new one', async () => {
+      const behind = { nodeId, gatewayId, localKey: 'gatewaykey000001' };
+      await startPlatform([plug(nodeDeviceId, 'Zigbee', { ...behind, host: '10.0.0.9', version: '3.4' })]);
+      await vi.waitFor(() => expect(routeOf(net.lan, gatewayId)).toBeDefined());
+      const first = routeOf(net.lan, gatewayId);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      // A reconnection at the same host and protocol version keeps the client: a new host or version builds it again.
+      await platform.saveDevice(plug(nodeDeviceId, 'Zigbee', { ...behind, host: '10.0.0.9', version: '3.4', isCloudOnly: false }));
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      await platform.saveDevice(plug(nodeDeviceId, 'Zigbee', { ...behind, host: '10.0.0.10', version: '3.4' }));
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '10.0.0.10', version: '3.4' }));
+      expect(first.close).toHaveBeenCalled();
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(nodeDeviceId, 'Zigbee', { ...behind, host: '10.0.0.10', version: '3.3' }));
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '10.0.0.10', version: '3.3' }));
+      await stopPlatform();
+    });
+
+    test('should reconnect every device behind a gateway when its given address changes, and let the first given address decide', async () => {
+      const behind = (node: string): Partial<TuyaDeviceConfig> => ({ nodeId: node, gatewayId, localKey: 'gatewaykey000001' });
+      const first = behind('a4c1380000000011');
+      const second = behind('a4c1380000000012');
+      await startPlatform([plug(deskId, 'Desk', first), plug(benchId, 'Bench', second)]);
+      await hear(gatewayId, '192.168.1.30');
+      await vi.waitFor(() => expect(routeOf(net.lan, gatewayId)).toBeDefined());
+      const heard = routeOf(net.lan, gatewayId);
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      vi.mocked(createLocalTuyaClient).mockClear();
+      // The device with no host of its own moves too: the client it went through is closed.
+      await platform.saveDevice(plug(deskId, 'Desk', { ...first, host: '10.0.0.9', version: '3.4' }));
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '10.0.0.9', version: '3.4' }));
+      expect(heard.close).toHaveBeenCalled();
+      // The first address given still decides: the other device reconnects to the same client.
+      update.mockClear();
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(benchId, 'Bench', { ...second, host: '10.0.0.10', version: '3.4' }));
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      // With the first taken away, the second decides.
+      update.mockClear();
+      await platform.saveDevice(plug(deskId, 'Desk', first));
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '10.0.0.10' }));
+      // With none given, the gateway is reached where it was heard.
+      update.mockClear();
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(benchId, 'Bench', second));
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '192.168.1.30', version: '3.3' }));
+      // An address given that is where the client already is keeps the client, and so does taking it away again.
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(deskId, 'Desk', { ...first, host: '192.168.1.30', version: '3.3' }));
+      await platform.saveDevice(plug(deskId, 'Desk', first));
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      update.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should keep the client of a gateway whose host is taken away before it was heard', async () => {
+      const unheard = 'bf00000000000000gw07';
+      const behind = { nodeId, gatewayId: unheard, localKey: 'gatewaykey000001' };
+      await startPlatform([plug(nodeDeviceId, 'Zigbee', { ...behind, host: '10.0.0.9', version: '3.4' })]);
+      await vi.waitFor(() => expect(routeOf(net.lan, unheard)).toBeDefined());
+      const client = routeOf(net.lan, unheard);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(nodeDeviceId, 'Zigbee', behind));
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      expect(client.close).not.toHaveBeenCalled();
+      // A reconnection asked for builds a new connection, still not heard, at the host it had.
+      await platform.reconnectDevice(nodeDeviceId);
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: unheard, host: '10.0.0.9', version: '3.4' }));
+      expect(client.close).toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should finish the reconnections of a change that fails halfway before the next change', async () => {
+      const first = { nodeId: 'a4c1380000000011', gatewayId, localKey: 'gatewaykey000001' };
+      await startPlatform([plug(deskId, 'Desk', first), plug(benchId, 'Bench', { ...first, nodeId: 'a4c1380000000012' })]);
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      let finish = (_answered: boolean): void => undefined;
+      update.mockImplementationOnce(
+        async () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const rename = vi.spyOn(TuyaAccessory.prototype, 'updateConfig');
+      rename.mockResolvedValueOnce().mockRejectedValueOnce(new Error('no label'));
+      let isDone = false;
+      const saving = platform.saveDevice(plug(deskId, 'Desk', { ...first, host: '10.0.0.9', version: '3.4' })).finally(() => {
+        isDone = true;
+      });
+      await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(isDone).toBe(false);
+      finish(false);
+      await expect(saving).rejects.toThrow('no label');
+      expect(log.error).toHaveBeenCalledWith('A change to the devices failed: no label');
+      update.mockRestore();
+      rename.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should log no failure for a device it refuses to store', async () => {
+      await startPlatform([plug(deskId, 'Desk')]);
+      await expect(platform.saveDevice(plug(benchId, 'Desk'))).rejects.toThrow('Another device is already named "Desk"');
+      await settle();
+      expect(log.error).not.toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should log no failure for a read of an account signed out of meanwhile', async () => {
+      const cloud = await startPlatform();
+      const held = holdList(cloud);
+      const syncing = platform.syncDevices();
+      await vi.waitFor(() => expect(cloud.listDevices).toHaveBeenCalled());
+      await platform.signOut();
+      held.fail(new Error('gone'));
+      await syncing;
+      expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not be read'));
+      await stopPlatform();
+    });
+
+    test('should close an account signed in to as the shutdown begins', async () => {
+      await startPlatform();
+      const signing = platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' });
+      const stopping = platform.onShutdown('test');
+      await expect(signing).rejects.toThrow('The plugin is shutting down');
+      await stopping;
+      expect((net.accounts.at(-1) as unknown as { close: Mock }).close).toHaveBeenCalledTimes(1);
+      await platform.unregisterAllDevices();
+    });
+
+    test('should stay on the account it has when a new one or a sign out cannot be stored', async () => {
+      const cloud = await startPlatform();
+      writeSetup.mockRejectedValueOnce(new Error('disk full'));
+      await expect(platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' })).rejects.toThrow('disk full');
+      expect((net.accounts.at(-1) as unknown as { close: Mock }).close).toHaveBeenCalled();
+      expect((await platform.getSetupState()).account).toMatchObject({ type: 'smartLife' });
+      writeSetup.mockRejectedValueOnce(new Error('disk full'));
+      await expect(platform.signOut()).rejects.toThrow('disk full');
+      expect((cloud as unknown as { close: Mock }).close).not.toHaveBeenCalled();
+      expect((await platform.getSetupState()).account).toMatchObject({ type: 'smartLife' });
+      await stopPlatform();
+    });
+
+    test('should log stored data it cannot read', async () => {
+      vi.spyOn(SetupStore.prototype, 'read').mockImplementationOnce(async (report) => {
+        report('The stored Tuya account and devices cannot be read: using the copy from the write before');
+        return Promise.resolve({});
+      });
+      platform = await createStoredPlatform({ account, devices: [] });
+      addMatterbridge(platform);
+      await platform.onStart('test');
+      expect(log.warn).toHaveBeenCalledWith('The stored Tuya account and devices cannot be read: using the copy from the write before');
+      expect((await platform.getSetupState()).devices).toEqual([]);
+      await stopPlatform();
+    });
+
+    test('should keep an account it took when the devices fail to reconnect through it', async () => {
+      await startPlatform();
+      vi.spyOn(platform as unknown as { reconnectAll: () => Promise<void> }, 'reconnectAll').mockRejectedValueOnce(new Error('stuck'));
+      await expect(platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' })).rejects.toThrow('stuck');
+      expect((net.accounts.at(-1) as unknown as { close: Mock }).close).not.toHaveBeenCalled();
+      expect((await platform.getSetupState()).account).toMatchObject({ type: 'developer' });
+      await stopPlatform();
+    });
+
+    test('should store a session refreshed while the platform shuts down', async () => {
+      await startPlatform();
+      const closing = net.accounts.at(-1) as unknown as { close: Mock };
+      const refreshed = { ...session, refreshToken: 'refreshed' };
+      closing.close.mockImplementationOnce(async () => {
+        net.sessionChange?.(refreshed);
+        return Promise.resolve();
+      });
+      const storage = platform.context;
+      if (storage === undefined) throw new Error('No storage');
+      const set = vi.spyOn(storage, 'set');
+      await platform.onShutdown('test');
+      expect(set).toHaveBeenCalledWith('setup', expect.objectContaining({ account: expect.objectContaining({ session: refreshed }) }));
+      expect(log.error).not.toHaveBeenCalledWith(expect.stringContaining('could not be stored'));
+      await platform.unregisterAllDevices();
+    });
+
+    test('should reach a gateway that is a device of its own through the client of the devices behind it', async () => {
+      const hubId = 'bf00000000000000gw81';
+      const node = 'a4c1380000000081';
+      const hub = plug(hubId, 'Hub', { localKey: 'gatewaykey000001', host: '10.0.0.81', version: '3.4' });
+      const behind = plug(deskId, 'Desk', { nodeId: node, gatewayId: hubId, localKey: 'gatewaykey000001' });
+      net.dataPoints.set(hubId, plugDataPoints);
+      net.dataPoints.set(node, plugDataPoints);
+      await startPlatform([hub, behind]);
+      net.listed = [
+        createCloudDevice(plugFile, { deviceId: hubId, name: 'Hub', localKey: 'gatewaykey000001' }),
+        createCloudDevice(plugFile, { deviceId: deskId, name: 'Desk', nodeId: node, localKey: 'gatewaykey000001' }),
+      ];
+      await platform.pollDevices();
+      // One client, at the host given for the gateway itself, serves the gateway and the device behind it.
+      expect(net.lanOptions.filter((options) => options.deviceId === hubId)).toEqual([expect.objectContaining({ host: '10.0.0.81', version: '3.4' })]);
+      const shared = routeOf(net.lan, hubId);
+      expect(shared.readDataPoints).toHaveBeenCalled();
+      expect(routeOf(net.lan, node).readDataPoints).toHaveBeenCalled();
+      expect((await platform.getSetupState()).devices.map((device) => device.route)).toEqual(['lan', 'lan']);
+      // A reconnection of the gateway builds the shared client again, for the device behind it too.
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      await platform.reconnectDevice(hubId);
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(shared.close).toHaveBeenCalled();
+      // The gateway removed as a device leaves the client to the device behind it: a check of the gateway goes through it.
+      const rebuilt = routeOf(net.lan, hubId);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.removeDevice(hubId);
+      expect(rebuilt.close).not.toHaveBeenCalled();
+      expect(await platform.probe(hubId)).toMatchObject({ status: 'ready', route: 'lan' });
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      expect(rebuilt.close).not.toHaveBeenCalled();
+      // And so does the gateway stored again.
+      await platform.saveDevice(hub);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      // Without a device behind it, the gateway gets a client of its own, and the shared one is closed first.
+      update.mockClear();
+      await platform.removeDevice(deskId);
+      expect(rebuilt.close).toHaveBeenCalled();
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledTimes(1);
+      const own = routeOf(net.lan, hubId);
+      expect(own).not.toBe(rebuilt);
+      // A device stored behind it again puts the gateway back on a shared client.
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(behind);
+      expect(own.close).toHaveBeenCalled();
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      update.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should leave a gateway that is a device of its own without a route on the LAN until it is heard', async () => {
+      const hubId = 'bf00000000000000gw82';
+      await startPlatform([
+        plug(hubId, 'Hub', { localKey: 'gatewaykey000001' }),
+        plug(deskId, 'Desk', { nodeId: 'a4c1380000000082', gatewayId: hubId, localKey: 'gatewaykey000001' }),
+      ]);
+      expect((await platform.getSetupState()).devices.map((device) => device.hasLan)).toEqual([false, false]);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should keep a device on its gateway when the cloud withholds its key or does not list the gateway', async () => {
+      const shared = 'bf00000000000000gw78';
+      const stayingId = 'bf0000000000000078aa';
+      const node = 'a4c1380000000078';
+      const cloud = await startPlatform([plug(stayingId, 'Staying', { nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' })]);
+      cloud.listDevices.mockResolvedValueOnce([createCloudDevice(plugFile, { deviceId: stayingId, name: 'Staying', nodeId: node, localKey: undefined })]);
+      await platform.syncDevices();
+      expect(await storedDevice(stayingId)).toMatchObject({ nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' });
+      cloud.listDevices.mockResolvedValueOnce([createCloudDevice(plugFile, { deviceId: stayingId, name: 'Staying', nodeId: node, localKey: 'gatewaykey000001' })]);
+      await platform.syncDevices();
+      expect(await storedDevice(stayingId)).toMatchObject({ nodeId: node, gatewayId: shared });
+      await stopPlatform();
+    });
+
+    test('should build a new connection to a gateway when a device behind it is reconnected, and reconnect the others', async () => {
+      const shared = 'bf00000000000000gw79';
+      const behind = (node: string): Partial<TuyaDeviceConfig> => ({ nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' });
+      await startPlatform([plug(deskId, 'Desk', behind('a4c1380000000079')), plug(benchId, 'Bench', behind('a4c1380000000080'))]);
+      await platform.hearDevice({ deviceId: shared, host: '192.168.1.79', version: '3.3', productKey: 'x' });
+      await vi.waitFor(() => expect(routeOf(net.lan, shared)).toBeDefined());
+      const client = routeOf(net.lan, shared);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      expect(await platform.reconnectDevice(deskId)).toBe(true);
+      expect(update).toHaveBeenCalledTimes(2);
+      // One new connection serves both.
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(client.close).toHaveBeenCalled();
+      update.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should build a new client for a device heard with a new protocol version, unless it was given one', async () => {
+      const heardId = 'bf0000000000000070aa';
+      const givenId = 'bf0000000000000071aa';
+      const stoppedId = 'bf0000000000000077aa';
+      await startPlatform([plug(heardId, 'Heard'), plug(givenId, 'Given', { host: '10.0.0.71', version: '3.3' })]);
+      await platform.hearDevice({ deviceId: heardId, host: '192.168.1.70', version: '3.3', productKey: 'x' });
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.hearDevice({ deviceId: heardId, host: '192.168.1.70', version: '3.4', productKey: 'x' });
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: heardId, version: '3.4' }));
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.hearDevice({ deviceId: givenId, host: '192.168.1.71', version: '3.3', productKey: 'x' });
+      await platform.hearDevice({ deviceId: givenId, host: '192.168.1.71', version: '3.4', productKey: 'x' });
+      // A device on the cloud alone, and a device that does not run, get no client on the LAN either.
+      await platform.saveDevice(plug(heardId, 'Heard', { isCloudOnly: true }));
+      await platform.hearDevice({ deviceId: heardId, host: '192.168.1.70', version: '3.5', productKey: 'x' });
+      vi.spyOn(TuyaPlatform.prototype, 'registerDevice').mockRejectedValueOnce(new Error('taken'));
+      await platform.saveDevice(plug(stoppedId, 'Stopped'));
+      await platform.hearDevice({ deviceId: stoppedId, host: '192.168.1.77', version: '3.3', productKey: 'x' });
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should build the client of a gateway again when it is heard with a new protocol version, unless one was given', async () => {
+      const heardGateway = 'bf00000000000000gw70';
+      const givenGateway = 'bf00000000000000gw71';
+      const behind = (gateway: string, node: string): Partial<TuyaDeviceConfig> => ({ nodeId: node, gatewayId: gateway, localKey: 'gatewaykey000001' });
+      await startPlatform([
+        plug('bf0000000000000072aa', 'First', behind(heardGateway, 'a4c1380000000072')),
+        plug('bf0000000000000073aa', 'Second', behind(heardGateway, 'a4c1380000000073')),
+        plug('bf0000000000000074aa', 'Third', { ...behind(givenGateway, 'a4c1380000000074'), host: '10.0.0.74', version: '3.3' }),
+      ]);
+      await platform.hearDevice({ deviceId: heardGateway, host: '192.168.1.72', version: '3.3', productKey: 'x' });
+      await vi.waitFor(() => expect(routeOf(net.lan, heardGateway)).toBeDefined());
+      const before = routeOf(net.lan, heardGateway);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      await platform.hearDevice({ deviceId: heardGateway, host: '192.168.1.72', version: '3.4', productKey: 'x' });
+      // One new client serves both devices behind it, and the one that spoke the old version is closed.
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: heardGateway, version: '3.4' }));
+      expect(before.close).toHaveBeenCalled();
+      update.mockClear();
+      await platform.hearDevice({ deviceId: givenGateway, host: '192.168.1.74', version: '3.3', productKey: 'x' });
+      await platform.hearDevice({ deviceId: givenGateway, host: '192.168.1.74', version: '3.4', productKey: 'x' });
+      expect(update).not.toHaveBeenCalled();
+      update.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should take a device off a gateway the cloud no longer places it behind, and leave the gateway to the others', async () => {
+      const shared = 'bf00000000000000gw75';
+      const movedId = 'bf0000000000000075aa';
+      const stayingId = 'bf0000000000000076aa';
+      const behind = (node: string): Partial<TuyaDeviceConfig> => ({ nodeId: node, gatewayId: shared, localKey: 'gatewaykey000001' });
+      const cloud = await startPlatform([plug(movedId, 'Moved', behind('a4c1380000000075')), plug(stayingId, 'Staying', behind('a4c1380000000076'))]);
+      await platform.hearDevice({ deviceId: shared, host: '192.168.1.75', version: '3.3', productKey: 'x' });
+      await vi.waitFor(() => expect(routeOf(net.lan, shared)).toBeDefined());
+      const client = routeOf(net.lan, shared);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      // Paired again on its own, with a key of its own: the other device still goes through the gateway.
+      cloud.listDevices.mockResolvedValueOnce([
+        createCloudDevice(plugFile, { deviceId: movedId, name: 'Moved', localKey: 'ownkey0000000001' }),
+        createCloudDevice(plugFile, { deviceId: shared, name: 'Hub', localKey: 'gatewaykey000001', category: 'wg2' }),
+        createCloudDevice(plugFile, { deviceId: stayingId, name: 'Staying', nodeId: 'a4c1380000000076', localKey: 'gatewaykey000001' }),
+      ]);
+      await platform.syncDevices();
+      const moved = await storedDevice(movedId);
+      expect(moved).toMatchObject({ localKey: 'ownkey0000000001' });
+      expect(moved).not.toHaveProperty('nodeId');
+      expect(moved).not.toHaveProperty('gatewayId');
+      expect(await storedDevice(stayingId)).toMatchObject({ gatewayId: shared });
+      expect(createLocalTuyaClient).not.toHaveBeenCalledWith(expect.objectContaining({ deviceId: shared }));
+      expect(client.close).not.toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should reconnect a device on request, start one that could not start, and say a device it does not have', async () => {
+      await startPlatform([plug(deskId, 'Desk')]);
+      expect(await platform.reconnectDevice('bf0000000000000055aa')).toBe(false);
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      expect(await platform.reconnectDevice(deskId)).toBe(true);
+      expect(update).toHaveBeenCalledTimes(1);
+      update.mockRestore();
+      const retry = vi.spyOn(TuyaPlatform.prototype, 'registerDevice').mockRejectedValueOnce(new Error('taken'));
+      await platform.removeDevice(deskId);
+      await platform.saveDevice(plug(deskId, 'Desk'));
+      expect((await platform.getSetupState()).devices[0]).toMatchObject({ status: 'stopped', error: 'taken' });
+      retry.mockRestore();
+      expect(await platform.reconnectDevice(deskId)).toBe(true);
+      expect((await platform.getSetupState()).devices[0]?.status).not.toBe('stopped');
+      await stopPlatform();
+    });
+
+    test('should reconnect the devices side by side, and log one that fails', async () => {
+      await startPlatform([plug(deskId, 'Desk'), plug(benchId, 'Bench')]);
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      let finish = (_answered: boolean): void => undefined;
+      update.mockImplementationOnce(
+        async () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      update.mockRejectedValueOnce(new Error('stuck'));
+      const out = platform.signOut();
+      // The second is reconnected while the first still waits for its read.
+      await vi.waitFor(() => expect(update).toHaveBeenCalledTimes(2));
+      await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith('"Bench" could not be reconnected: stuck'));
+      finish(false);
+      await out;
+      update.mockRestore();
+      await stopPlatform();
+    });
   });
 });
