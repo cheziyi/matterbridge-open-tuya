@@ -353,6 +353,125 @@ describe('TuyaAccessory', () => {
     });
   });
 
+  describe('a write that ends while other things happen', () => {
+    let count = 0;
+    const noAnswer = new TuyaError('REQUEST_TIMED_OUT', 'no answer');
+
+    /**
+     * Start a plug of its own, which is on
+     *
+     * @returns {Promise<{ client: FakeClient; accessory: TuyaAccessory }>} The plug and its client.
+     */
+    async function startPlug(): Promise<{ client: FakeClient; accessory: TuyaAccessory }> {
+      count += 1;
+      const client = createFakeClient({ device: { on: true } });
+      const accessory = new TuyaAccessory({
+        config: createDeviceConfig(plugFile, { deviceId: `bf00000000000000${String(count).padStart(2, '0')}wr` }),
+        entry: entryOf(plugFile),
+        features: getDeviceFeatures(entryOf(plugFile)),
+        productName: 'Plug',
+        createConnection: (): DeviceConnection => connectionOf(client),
+        log,
+        vendorId,
+      });
+      await addAccessory(accessory);
+      await accessory.start();
+      return { client, accessory };
+    }
+
+    /**
+     * Make the next write to the client wait for the test
+     *
+     * @param {FakeClient} client The client.
+     * @returns {{ resolve: () => void; reject: (error: Error) => void }} How the write ends.
+     */
+    function holdWrite(client: FakeClient): { resolve: () => void; reject: (error: Error) => void } {
+      const held = { resolve: (): void => undefined, reject: (_error: Error): void => undefined };
+      client.writeControls.mockImplementationOnce(
+        async () =>
+          new Promise<void>((resolve, reject) => {
+            held.resolve = resolve;
+            held.reject = reject;
+          }),
+      );
+      return held;
+    }
+
+    test('should report a device unreachable again after a write it took between failed reads', async () => {
+      const { client, accessory } = await startPlug();
+      client.readControls.mockRejectedValue(noAnswer);
+      await accessory.refresh();
+      await accessory.refresh();
+      expect(accessory.getStatus().isReachable).toBe(false);
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(accessory.getStatus().isReachable).toBe(true));
+      expect(accessory.getStatus()).toMatchObject({ lastError: undefined, lastErrorCode: undefined });
+      await accessory.refresh();
+      expect(accessory.getStatus().isReachable).toBe(true);
+      await accessory.refresh();
+      expect(accessory.getStatus().isReachable).toBe(false);
+      await accessory.dispose();
+    });
+
+    test('should keep showing the newest request while an older write ends', async () => {
+      const { client, accessory } = await startPlug();
+      const older = holdWrite(client);
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledTimes(1));
+      const newer = holdWrite(client);
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', true);
+      older.resolve();
+      await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledTimes(2));
+      expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(true);
+      expect(accessory.getStatus().values).toEqual({ device: { on: false } });
+      newer.resolve();
+      await settle(accessory);
+      expect(accessory.getStatus().values).toEqual({ device: { on: true } });
+      await accessory.dispose();
+    });
+
+    test('should not undo a newer request when an older write fails with its read', async () => {
+      const { client, accessory } = await startPlug();
+      const older = holdWrite(client);
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledTimes(1));
+      const newer = holdWrite(client);
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', true);
+      await accessory.endpoint.setAttribute(OnOff, 'onOff', false);
+      client.readControls.mockRejectedValueOnce(noAnswer);
+      older.reject(noAnswer);
+      await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledTimes(2));
+      // The undo would have put back on: what was shown stays.
+      expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(false);
+      newer.resolve();
+      await accessory.dispose();
+    });
+
+    test('should write nothing to Matter when a write ends after the device was stopped', async () => {
+      const { client, accessory } = await startPlug();
+      const taken = holdWrite(client);
+      await writeAsController(accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledTimes(1));
+      const update = vi.spyOn(accessory.endpoint, 'updateAttribute');
+      const disposing = accessory.dispose();
+      taken.resolve();
+      await disposing;
+      expect(update).not.toHaveBeenCalled();
+      update.mockRestore();
+
+      const other = await startPlug();
+      const refused = holdWrite(other.client);
+      await writeAsController(other.accessory.endpoint, 'OnOff', 'onOff', false);
+      await vi.waitFor(() => expect(other.client.writeControls).toHaveBeenCalledTimes(1));
+      const otherUpdate = vi.spyOn(other.accessory.endpoint, 'updateAttribute');
+      const stopping = other.accessory.dispose();
+      refused.reject(noAnswer);
+      await stopping;
+      expect(otherUpdate).not.toHaveBeenCalled();
+      otherUpdate.mockRestore();
+    });
+  });
+
   describe('a power strip whose outlets are devices of their own', () => {
     let client: FakeClient;
     let accessory: TuyaAccessory;

@@ -113,6 +113,34 @@ function describeAccount(account: TuyaAccountConfig, needsSignIn: boolean): Setu
   return { type: 'developer', accessId: account.accessId, dataCenter: account.dataCenter, needsSignIn };
 }
 
+/** A change the setup page asked for and the plugin refuses: the page shows why, and nothing failed. */
+class RefusedChangeError extends Error {}
+
+/**
+ * Tell whether two addresses on the LAN are the same
+ *
+ * @param {LanAddress | undefined} left An address.
+ * @param {LanAddress | undefined} right The other address.
+ * @returns {boolean} True when the host and the protocol version are the same.
+ */
+function isSameAddress(left: LanAddress | undefined, right: LanAddress | undefined): boolean {
+  return left?.host === right?.host && left?.version === right?.version;
+}
+
+/**
+ * Find where a gateway was given to be, in the options of the devices behind it
+ *
+ * The first device with a host and a protocol version decides: one client serves them all, so they share one address.
+ *
+ * @param {readonly TuyaDeviceConfig[]} devices The stored devices.
+ * @param {string} gatewayId The device ID of the gateway.
+ * @returns {LanAddress | undefined} The address, when a device behind the gateway gives one.
+ */
+function findGivenGatewayAddress(devices: readonly TuyaDeviceConfig[], gatewayId: string): LanAddress | undefined {
+  const device = devices.find((candidate) => candidate.gatewayId === gatewayId && candidate.host !== undefined && candidate.version !== undefined);
+  return device?.host !== undefined && device.version !== undefined ? { host: device.host, version: device.version } : undefined;
+}
+
 /**
  * The platform: it holds the Tuya account, listens for the devices on the LAN, stores the devices by their device ID,
  * keeps their local keys up to date, exposes each one to Matter and serves the guided setup.
@@ -139,8 +167,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private discoveryError: string | undefined;
   /** Where each device was last heard on the LAN, or stored as heard at before the restart, by its device ID. */
   private readonly addresses = new Map<string, LanAddress>();
-  /** The client of each gateway the devices behind it are reached through, with the local key it was built with, by its device ID. */
-  private readonly gateways = new Map<string, { client: LocalTuyaClient; localKey: string; address: LanAddress }>();
+  /** The client of each gateway the devices behind it are reached through, with the local key and the address it was built with, and whether a device gave that address, by its device ID. */
+  private readonly gateways = new Map<string, { client: LocalTuyaClient; localKey: string; address: LanAddress; isGiven: boolean }>();
   /** How many checks of a device are going on, which may each hold the client of a gateway no stored device is behind. */
   private checksInProgress = 0;
   /** The devices of the account as the cloud last listed them, by their device ID, with their local keys: the setup page never sees those. */
@@ -453,7 +481,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       try {
         await this.applyListing(await this.readDevices(), cloud);
       } catch (error) {
-        if (!this.isStopping) this.log.warn(`The devices of the Tuya account could not be read: ${describeError(error)}`);
+        // An account replaced meanwhile is not a failure: its list no longer matters.
+        if (!this.isStopping && this.cloud === cloud) this.log.warn(`The devices of the Tuya account could not be read: ${describeError(error)}`);
       }
     }
     try {
@@ -526,7 +555,8 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     // Inside the queue: the device list is the one every change queued before this one left.
     await this.enqueueChange(async () => {
       const stored = this.devices.find((candidate) => candidate.deviceId === device.deviceId);
-      if (this.devices.some((candidate) => candidate !== stored && candidate.name === device.name)) throw new Error(`Another device is already named "${device.name}"`);
+      if (this.devices.some((candidate) => candidate !== stored && candidate.name === device.name))
+        throw new RefusedChangeError(`Another device is already named "${device.name}"`);
       const listed = this.listed.get(device.deviceId);
       // What the cloud lists is never taken from the page: from the last list, or as it was stored.
       const { cloudName: _cloudName, category: _category, nodeId: _nodeId, gatewayId: _gatewayId, localKey: _localKey, ...options } = device;
@@ -543,7 +573,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
         }
       }
       if (findDeviceEntry(next) === undefined)
-        throw new Error(next.catalogFile === undefined ? 'No entry names the controls of the device from its model' : `The device catalog has no entry from ${next.catalogFile}`);
+        throw new RefusedChangeError(
+          next.catalogFile === undefined ? 'No entry names the controls of the device from its model' : `The device catalog has no entry from ${next.catalogFile}`,
+        );
       await this.reconcile(stored === undefined ? [...this.devices, next] : this.devices.map((candidate) => (candidate === stored ? next : candidate)));
     });
   }
@@ -694,15 +726,21 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * @returns {Promise<void>} Resolves when the account is stored and the devices are connected through it.
    */
   private async setAccount(account: TuyaAccountConfig, cloud = this.createCloud(account), listing?: readonly TuyaCloudDevice[]): Promise<void> {
-    await this.enqueueChange(async () => {
-      await this.cloud?.close().catch(ignoreFailure);
-      this.account = account;
-      this.cloud = cloud;
-      this.isAccountRejected = false;
-      this.listed = new Map(listing?.map((device) => [device.deviceId, device]));
-      this.storeConfig();
-      await this.reconnectAll();
-    });
+    try {
+      await this.enqueueChange(async () => {
+        await this.cloud?.close().catch(ignoreFailure);
+        this.account = account;
+        this.cloud = cloud;
+        this.isAccountRejected = false;
+        this.listed = new Map(listing?.map((device) => [device.deviceId, device]));
+        this.storeConfig();
+        await this.reconnectAll();
+      });
+    } catch (error) {
+      // Refused by the shutdown: nothing else holds this account to close it.
+      if (this.cloud !== cloud) await cloud.close().catch(ignoreFailure);
+      throw error;
+    }
     // The stored local keys may be out of date: the list in hand, or a new read of it, brings them up to date without holding the sign in.
     void (listing === undefined ? this.syncDevices() : this.applyListing(listing, cloud).catch(ignoreFailure));
   }
@@ -814,7 +852,7 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
     if (this.isStopping) throw new Error('The plugin is shutting down');
     const result = this.changes.then(task);
     this.changes = result.catch((error: unknown) => {
-      this.log.error(`A change to the devices failed: ${getErrorMessage(error)}`);
+      if (!(error instanceof RefusedChangeError)) this.log.error(`A change to the devices failed: ${getErrorMessage(error)}`);
     });
     return result;
   }
@@ -825,23 +863,30 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
    * One client serves every device behind the gateway, which shares its local key. A gateway paired again in the app
    * has a new local key: its client is built again with it, and the one built with the old key, which reaches nothing
    * any more, is closed. A host given for a device behind the gateway is where the gateway is reached, as a host given
-   * for any other device: a new one builds the client again in the same way.
+   * for any other device: a new one builds the client again in the same way, and so does taking it away, once the
+   * gateway was heard elsewhere. A client built from what was heard follows the gateway by itself.
+   *
+   * Closing a client ends the routes of every device behind it: whoever changes the address reconnects them all.
    *
    * @param {string} gatewayId The device ID of the gateway.
    * @param {string} localKey The local key of the gateway, which the devices behind it have.
-   * @param {LanAddress} [given] The host and the protocol version given in the options of the device behind it.
    * @returns {LocalTuyaClient | undefined} The client, or undefined while the gateway was neither given nor heard, or its client cannot be created.
    */
-  private getGateway(gatewayId: string, localKey: string, given?: LanAddress): LocalTuyaClient | undefined {
+  private getGateway(gatewayId: string, localKey: string): LocalTuyaClient | undefined {
     const known = this.gateways.get(gatewayId);
-    if (known?.localKey === localKey && (given === undefined || (given.host === known.address.host && given.version === known.address.version))) return known.client;
-    const address = given ?? this.addresses.get(gatewayId);
+    const given = findGivenGatewayAddress(this.devices, gatewayId);
+    if (known?.localKey === localKey && given === undefined && !known.isGiven) return known.client;
+    const address = given ?? this.addresses.get(gatewayId) ?? known?.address;
     if (address === undefined) return undefined;
+    if (known?.localKey === localKey && isSameAddress(address, known.address)) {
+      known.isGiven = given !== undefined;
+      return known.client;
+    }
     try {
       const client = createLocalTuyaClient({ deviceId: gatewayId, host: address.host, version: address.version, localKey, ...(this.discovery && { discovery: this.discovery }) });
-      // The client is needed now: the one with the old key is closed in the background.
+      // The client is needed now: the one it replaces is closed in the background.
       if (known !== undefined) void known.client.close().catch(ignoreFailure);
-      this.gateways.set(gatewayId, { client, localKey, address });
+      this.gateways.set(gatewayId, { client, localKey, address, isGiven: given !== undefined });
       return client;
     } catch (error) {
       this.log.warn(`The gateway ${gatewayId} cannot be reached on the LAN: ${getErrorMessage(error)}`);
@@ -850,11 +895,10 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   }
 
   private async closeGateways(isUnused: (gatewayId: string) => boolean): Promise<void> {
-    for (const [gatewayId, gateway] of this.gateways) {
-      if (!isUnused(gatewayId)) continue;
-      this.gateways.delete(gatewayId);
-      await gateway.client.close().catch(ignoreFailure);
-    }
+    // Out of the map before the first close is awaited: a gateway needed meanwhile gets a new client, never one being closed.
+    const unused = [...this.gateways].filter(([gatewayId]) => isUnused(gatewayId));
+    for (const [gatewayId] of unused) this.gateways.delete(gatewayId);
+    await Promise.all(unused.map(async ([, gateway]) => gateway.client.close().catch(ignoreFailure)));
   }
 
   private async closeUnusedGateways(): Promise<void> {
@@ -879,9 +923,9 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
   private createLanRoute(device: Pick<TuyaDeviceConfig, 'deviceId' | 'localKey' | 'nodeId' | 'gatewayId' | 'host' | 'version'>): TuyaClient | undefined {
     const { deviceId, localKey, nodeId, gatewayId } = device;
     if (localKey === undefined) return undefined;
-    const given = device.host !== undefined && device.version !== undefined ? { host: device.host, version: device.version } : undefined;
     try {
-      if (nodeId !== undefined && gatewayId !== undefined) return this.getGateway(gatewayId, localKey, given)?.createClient(nodeId);
+      if (nodeId !== undefined && gatewayId !== undefined) return this.getGateway(gatewayId, localKey)?.createClient(nodeId);
+      const given = device.host !== undefined && device.version !== undefined ? { host: device.host, version: device.version } : undefined;
       const address = given ?? this.addresses.get(deviceId);
       if (address === undefined) return undefined;
       return createLocalTuyaClient({ deviceId, host: address.host, version: address.version, localKey, ...(this.discovery && { discovery: this.discovery }) });
@@ -938,21 +982,28 @@ export class TuyaPlatform extends MatterbridgeDynamicPlatform implements SetupPl
       if (!this.devices.some((candidate) => candidate.deviceId === device.deviceId)) await this.stopDevice(device);
     }
     const reconnecting: Promise<void>[] = [];
-    for (const device of this.devices) {
-      const before = previous.find((candidate) => candidate.deviceId === device.deviceId);
-      const accessory = this.accessories.get(device.deviceId);
-      if (before === undefined || accessory === undefined) {
-        await this.startDevice(device);
-        continue;
+    try {
+      for (const device of this.devices) {
+        const before = previous.find((candidate) => candidate.deviceId === device.deviceId);
+        const accessory = this.accessories.get(device.deviceId);
+        if (before === undefined || accessory === undefined) {
+          await this.startDevice(device);
+          continue;
+        }
+        // The endpoints of a registered device cannot change while Matterbridge runs: the device keeps the ones it was
+        // built with, and gets its new ones at the next start.
+        if (!hasSameExposure(before, device)) this.requireRestart(device);
+        await accessory.updateConfig(device);
+        // A new address of a gateway replaces the client every device behind it goes through.
+        const { gatewayId } = device;
+        const hasGatewayMoved = gatewayId !== undefined && !isSameAddress(findGivenGatewayAddress(previous, gatewayId), findGivenGatewayAddress(devices, gatewayId));
+        if (hasGatewayMoved || !hasSameConnection(before, device)) reconnecting.push(this.reconnect(device, accessory));
       }
-      // The endpoints of a registered device cannot change while Matterbridge runs: the device keeps the ones it was
-      // built with, and gets its new ones at the next start.
-      if (!hasSameExposure(before, device)) this.requireRestart(device);
-      await accessory.updateConfig(device);
-      if (!hasSameConnection(before, device)) reconnecting.push(this.reconnect(device, accessory));
+    } finally {
+      // Changes run one after the other, also when this one fails halfway.
+      await Promise.all(reconnecting);
+      await this.closeUnusedGateways();
     }
-    await Promise.all(reconnecting);
-    await this.closeUnusedGateways();
   }
 
   private async startStoppedDevices(): Promise<void> {

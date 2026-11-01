@@ -1008,6 +1008,130 @@ describe('TuyaPlatform', () => {
       await stopPlatform();
     });
 
+    test('should reconnect every device behind a gateway when its given address changes, and let the first given address decide', async () => {
+      const behind = (node: string): Partial<TuyaDeviceConfig> => ({ nodeId: node, gatewayId, localKey: 'gatewaykey000001' });
+      const first = behind('a4c1380000000011');
+      const second = behind('a4c1380000000012');
+      await startPlatform([plug(deskId, 'Desk', first), plug(benchId, 'Bench', second)]);
+      await hear(gatewayId, '192.168.1.30');
+      await vi.waitFor(() => expect(routeOf(net.lan, gatewayId)).toBeDefined());
+      const heard = routeOf(net.lan, gatewayId);
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      vi.mocked(createLocalTuyaClient).mockClear();
+      // The device with no host of its own moves too: the client it went through is closed.
+      await platform.saveDevice(plug(deskId, 'Desk', { ...first, host: '10.0.0.9', version: '3.4' }));
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '10.0.0.9', version: '3.4' }));
+      expect(heard.close).toHaveBeenCalled();
+      // The first address given still decides: the other device reconnects to the same client.
+      update.mockClear();
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(benchId, 'Bench', { ...second, host: '10.0.0.10', version: '3.4' }));
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      // With the first taken away, the second decides.
+      update.mockClear();
+      await platform.saveDevice(plug(deskId, 'Desk', first));
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '10.0.0.10' }));
+      // With none given, the gateway is reached where it was heard.
+      update.mockClear();
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(benchId, 'Bench', second));
+      expect(update).toHaveBeenCalledTimes(2);
+      expect(createLocalTuyaClient).toHaveBeenCalledWith(expect.objectContaining({ deviceId: gatewayId, host: '192.168.1.30', version: '3.3' }));
+      // An address given that is where the client already is keeps the client, and so does taking it away again.
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(deskId, 'Desk', { ...first, host: '192.168.1.30', version: '3.3' }));
+      await platform.saveDevice(plug(deskId, 'Desk', first));
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      update.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should keep the client of a gateway whose host is taken away before it was heard', async () => {
+      const unheard = 'bf00000000000000gw07';
+      const behind = { nodeId, gatewayId: unheard, localKey: 'gatewaykey000001' };
+      await startPlatform([plug(nodeDeviceId, 'Zigbee', { ...behind, host: '10.0.0.9', version: '3.4' })]);
+      await vi.waitFor(() => expect(routeOf(net.lan, unheard)).toBeDefined());
+      const client = routeOf(net.lan, unheard);
+      vi.mocked(createLocalTuyaClient).mockClear();
+      await platform.saveDevice(plug(nodeDeviceId, 'Zigbee', behind));
+      expect(createLocalTuyaClient).not.toHaveBeenCalled();
+      expect(client.close).not.toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should finish the reconnections of a change that fails halfway before the next change', async () => {
+      const first = { nodeId: 'a4c1380000000011', gatewayId, localKey: 'gatewaykey000001' };
+      await startPlatform([plug(deskId, 'Desk', first), plug(benchId, 'Bench', { ...first, nodeId: 'a4c1380000000012' })]);
+      const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');
+      let finish = (_answered: boolean): void => undefined;
+      update.mockImplementationOnce(
+        async () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+      const rename = vi.spyOn(TuyaAccessory.prototype, 'updateConfig');
+      rename.mockResolvedValueOnce().mockRejectedValueOnce(new Error('no label'));
+      let isDone = false;
+      const saving = platform.saveDevice(plug(deskId, 'Desk', { ...first, host: '10.0.0.9', version: '3.4' })).finally(() => {
+        isDone = true;
+      });
+      await vi.waitFor(() => expect(rename).toHaveBeenCalledTimes(2));
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(isDone).toBe(false);
+      finish(false);
+      await expect(saving).rejects.toThrow('no label');
+      expect(log.error).toHaveBeenCalledWith('A change to the devices failed: no label');
+      update.mockRestore();
+      rename.mockRestore();
+      await stopPlatform();
+    });
+
+    test('should log no failure for a device it refuses to store', async () => {
+      await startPlatform([plug(deskId, 'Desk')]);
+      await expect(platform.saveDevice(plug(benchId, 'Desk'))).rejects.toThrow('Another device is already named "Desk"');
+      await settle();
+      expect(log.error).not.toHaveBeenCalled();
+      await stopPlatform();
+    });
+
+    test('should log no failure for a read of an account signed out of meanwhile', async () => {
+      const cloud = await startPlatform();
+      const held = holdList(cloud);
+      const syncing = platform.syncDevices();
+      await vi.waitFor(() => expect(cloud.listDevices).toHaveBeenCalled());
+      await platform.signOut();
+      held.fail(new Error('gone'));
+      await syncing;
+      expect(log.warn).not.toHaveBeenCalledWith(expect.stringContaining('could not be read'));
+      await stopPlatform();
+    });
+
+    test('should close an account signed in to as the shutdown begins', async () => {
+      await startPlatform();
+      const signing = platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' });
+      const stopping = platform.onShutdown('test');
+      await expect(signing).rejects.toThrow('The plugin is shutting down');
+      await stopping;
+      expect((net.accounts.at(-1) as unknown as { close: Mock }).close).toHaveBeenCalledTimes(1);
+      await platform.unregisterAllDevices();
+    });
+
+    test('should keep an account it took when storing it fails', async () => {
+      await startPlatform();
+      const save = vi.spyOn(platform, 'saveConfig').mockImplementationOnce(() => {
+        throw new Error('disk full');
+      });
+      await expect(platform.signInDeveloper({ accessId: 'id', accessSecret: 'secret', dataCenter: 'eu' })).rejects.toThrow('disk full');
+      expect((net.accounts.at(-1) as unknown as { close: Mock }).close).not.toHaveBeenCalled();
+      save.mockRestore();
+      await stopPlatform();
+    });
+
     test('should reconnect the devices side by side, and log one that fails', async () => {
       await startPlatform([plug(deskId, 'Desk'), plug(benchId, 'Bench')]);
       const update = vi.spyOn(TuyaAccessory.prototype, 'updateConnection');

@@ -150,6 +150,9 @@ export class TuyaAccessory implements AccessoryEndpoints {
   private lastErrorCode: TuyaErrorCode | undefined;
   private failureCount = 0;
   private isDisposed = false;
+  /** The last write asked of each switch, by its feature: a write that ended behind a newer one says nothing of what the controller wants. */
+  private readonly latestWrites = new Map<string, number>();
+  private writeCount = 0;
   // Reads and writes run one after the other, so a read never overwrites what a write is about to send.
   private queue: Promise<void> = Promise.resolve();
   // Whether a read waits for the Matter node to be online, which the endpoints are written to only while it is.
@@ -406,6 +409,9 @@ export class TuyaAccessory implements AccessoryEndpoints {
     if (this.isDisposed) return;
     const what = `${feature.label.toLowerCase()} ${isOn ? 'on' : 'off'}`;
     this.log.info(`"${this.name}" received ${what}`);
+    this.writeCount += 1;
+    const write = this.writeCount;
+    this.latestWrites.set(feature.id, write);
     await this.enqueue(async () => {
       const client = this.connection?.client;
       const written = { [feature.component]: { [feature.control]: isOn } };
@@ -413,13 +419,17 @@ export class TuyaAccessory implements AccessoryEndpoints {
         if (client === undefined) throw new Error(noRouteMessage);
         await client.writeControls(written);
         this.log.info(`"${this.name}" set ${what}`);
-        // A read that was going on as the controller wrote may have put the old value back in Matter.
-        await this.apply(mergeValues(this.values, written), written);
+        this.markAnswered();
+        if (this.isDisposed) return;
+        // A read that was going on as the controller wrote may have put the old value back in Matter. A newer write
+        // leaves Matter showing what the controller last asked for.
+        await this.apply(mergeValues(this.values, written), this.latestWrites.get(feature.id) === write ? written : {});
       } catch (error) {
         this.recordError(error);
         this.log.error(`"${this.name}" did not take ${what}: ${getErrorMessage(error)}`);
+        if (this.isDisposed) return;
         // Read back what the device holds, which undoes the request in Matter.
-        if (!(await this.readAndApply())) await this.undoWrite(feature, isOn);
+        if (!(await this.readAndApply()) && this.latestWrites.get(feature.id) === write) await this.undoWrite(feature, isOn);
       }
     });
   }
@@ -466,12 +476,17 @@ export class TuyaAccessory implements AccessoryEndpoints {
       return false;
     }
     this.isConnecting = false;
-    this.failureCount = 0;
-    this.lastError = undefined;
-    this.lastErrorCode = undefined;
+    this.markAnswered();
     this.logRoute(connection);
     await this.apply(values);
     return true;
+  }
+
+  // Starts the count of failures again: only failures in a row make a device unreachable.
+  private markAnswered(): void {
+    this.failureCount = 0;
+    this.lastError = undefined;
+    this.lastErrorCode = undefined;
   }
 
   // Names the route the device answers through when it is another than the log last named.
