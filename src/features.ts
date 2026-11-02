@@ -21,13 +21,27 @@
  * limitations under the License.
  */
 
-import { CATALOG, type ControlValue, type ControlValues, createDeviceEntry, type Measure, type TuyaControl, type TuyaDeviceEntry, type TuyaDeviceModel } from 'open-tuya';
+import {
+  CATALOG,
+  type ControlValue,
+  type ControlValues,
+  createDeviceEntry,
+  type Measure,
+  type TuyaComponent,
+  type TuyaControl,
+  type TuyaDeviceEntry,
+  type TuyaDeviceModel,
+} from 'open-tuya';
 
 /**
- * The components a device in reach of this plugin is made of: the device itself, and the lights of its buttons or its
- * display. A light, a fan, a thermostat or any other component makes a kind of device the plugin does not control yet.
+ * The components a device in reach of this plugin is made of, besides its lights: the device itself, and the lights of
+ * its buttons or its display. A fan, a thermostat or any other component makes a kind of device the plugin does not
+ * control yet.
  */
 export const SUPPORTED_COMPONENTS = ['device', 'backlight', 'indicator', 'display', 'nightlight'] as const;
+
+/** The components that are a light of the device, each one light in Matter: `light`, and `light1`, `light2`... of a device with several. */
+const lightComponentPattern = /^light\d*$/;
 
 /** The readings that each get a sensor of their own in Matter. */
 export const SENSOR_KINDS = ['temperature', 'humidity', 'illuminance', 'occupancy', 'contact', 'waterLeak'] as const;
@@ -63,6 +77,48 @@ export interface SensorFeature extends ControlRef {
   unitFrom?: string;
 }
 
+/** A number control, and the range its value runs over. */
+export interface RangedControl {
+  /** The name of the control, in the component of the feature it belongs to. */
+  control: string;
+  /** The lowest value of the control, as `readControls` gives it. */
+  min: number;
+  /** The highest value of the control. */
+  max: number;
+}
+
+/** The colour of a light, which the device holds as one data point of a hue, a saturation and a brightness. */
+export interface LightColor {
+  /** The hue, in degrees from `min` to `max`. */
+  hue: RangedControl;
+  saturation: RangedControl;
+  /** The brightness of the colour, which stands for the brightness of the light while it shows a colour. */
+  brightness?: RangedControl;
+}
+
+/** The control that switches a light between its white and its colour, and the values of each. */
+export interface LightModeControl {
+  control: string;
+  /** The value of the colour, such as `hs`. */
+  color: string;
+  /** The value of the white, such as `color_temp` or `white`, on a light that has one. */
+  white?: string;
+}
+
+/** A light of the device: its switch, and the brightness, the colour temperature and the colour it takes. */
+export interface LightFeature extends ControlRef {
+  /** `<component>.on`, which tells the feature apart in the stored options. */
+  id: string;
+  /** What the light is, such as `Light` or `Light 2`. */
+  label: string;
+  /** The brightness of its white. */
+  brightness?: RangedControl;
+  /** The colour temperature of its white, in K. */
+  colorTemperature?: RangedControl;
+  color?: LightColor;
+  mode?: LightModeControl;
+}
+
 /** A reading of the meter of a device, and the unit the catalog gives it in. */
 export interface MeterReading extends ControlRef {
   unit: string;
@@ -82,6 +138,8 @@ export interface MeterFeature {
 
 /** What a device can show in Matter, as its catalog entry describes it. */
 export interface DeviceFeatures {
+  /** The lights, in the order of the catalog. */
+  lights: LightFeature[];
   /** The controls of its main function that turn something on and off, in the order of the catalog. */
   outlets: SwitchFeature[];
   /** The on/off settings, such as a child lock or the light of its buttons: each offered as a switch, none shown unless chosen. */
@@ -186,17 +244,17 @@ function listSensors(controls: Readonly<Record<string, TuyaControl>>): [string, 
  * Tell whether a catalog entry describes a device this plugin controls
  *
  * Edge cases:
- *  - a component outside `SUPPORTED_COMPONENTS`, such as a light or a fan -> `otherKind`
- *  - no outlet and no reading that gets a sensor -> `noControls`
+ *  - a component that is neither a light nor in `SUPPORTED_COMPONENTS`, such as a fan -> `otherKind`
+ *  - no light, no outlet and no reading that gets a sensor -> `noControls`
  *
  * @param {TuyaDeviceEntry} entry The entry.
  * @returns {EntrySupport} `supported`, or why the plugin does not control the device.
  */
 export function getEntrySupport(entry: TuyaDeviceEntry): EntrySupport {
   const components = Object.keys(entry.components);
-  if (!components.every((name) => (SUPPORTED_COMPONENTS as readonly string[]).includes(name))) return 'otherKind';
+  if (!components.every((name) => lightComponentPattern.test(name) || (SUPPORTED_COMPONENTS as readonly string[]).includes(name))) return 'otherKind';
   const features = getDeviceFeatures(entry);
-  return features.outlets.length > 0 || features.sensors.length > 0 ? 'supported' : 'noControls';
+  return features.lights.length > 0 || features.outlets.length > 0 || features.sensors.length > 0 ? 'supported' : 'noControls';
 }
 
 /**
@@ -216,9 +274,77 @@ function pickMeter(component: string, sensors: [string, TuyaControl][]): MeterFe
 }
 
 /**
+ * Read the range of a number control a light is set by
+ *
+ * Edge cases:
+ *  - a control that is read only, or not a number -> undefined: the light cannot be set by it
+ *  - a target range runs either way: its lower end is the minimum
+ *  - no range, or an empty one -> undefined
+ *
+ * @param {TuyaControl | undefined} control The control.
+ * @param {string} name Its name.
+ * @returns {RangedControl | undefined} The control and the range of its value, its raw range divided by its scale unless the catalog gives a target range.
+ */
+function readRange(control: TuyaControl | undefined, name: string): RangedControl | undefined {
+  if (control?.kind !== 'number' || control.readOnly === true) return undefined;
+  const scale = control.scale ?? 1;
+  const ends = control.targetRange === undefined ? [(control.min ?? Number.NaN) / scale, (control.max ?? Number.NaN) / scale] : [control.targetRange.min, control.targetRange.max];
+  const min = Math.min(...ends);
+  const max = Math.max(...ends);
+  if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return undefined;
+  return { control: name, min, max };
+}
+
+/**
+ * Read the control that switches a light between its white and its colour
+ *
+ * @param {TuyaControl | undefined} control The `colorMode` control.
+ * @returns {LightModeControl | undefined} The values of its colour and its white, or undefined when it has no colour value, or is read only.
+ */
+function readLightMode(control: TuyaControl | undefined): LightModeControl | undefined {
+  if (control?.kind !== 'select' || control.readOnly === true) return undefined;
+  const values = control.values?.map((mapping) => mapping.value) ?? [];
+  if (!values.includes('hs')) return undefined;
+  const mode: LightModeControl = { control: 'colorMode', color: 'hs' };
+  const white = values.find((value): value is string => value === 'color_temp' || value === 'white');
+  if (white !== undefined) mode.white = white;
+  return mode;
+}
+
+/**
+ * Read a light of the device from its component
+ *
+ * Edge cases:
+ *  - a component without a switch it can be turned on and off by -> undefined
+ *  - a colour needs both a hue and a saturation, and the mode control is kept only with a colour
+ *
+ * @param {string} component The name of the component, such as `light` or `light2`.
+ * @param {TuyaComponent} controls Its controls.
+ * @returns {LightFeature | undefined} The light, or undefined when it cannot be turned on and off.
+ */
+function readLight(component: string, controls: TuyaComponent): LightFeature | undefined {
+  const on = controls.on;
+  if (on?.kind !== 'switch' || on.readOnly === true) return undefined;
+  const light: LightFeature = { id: `${component}.on`, component, control: 'on', label: labelControl(component) };
+  const brightness = readRange(controls.brightness, 'brightness');
+  if (brightness !== undefined) light.brightness = brightness;
+  const colorTemperature = readRange(controls.colorTemperatureInK, 'colorTemperatureInK');
+  if (colorTemperature !== undefined) light.colorTemperature = colorTemperature;
+  const hue = readRange(controls.hue, 'hue');
+  const saturation = readRange(controls.saturation, 'saturation');
+  if (hue === undefined || saturation === undefined) return light;
+  light.color = { hue, saturation };
+  const colorBrightness = readRange(controls.colorBrightness, 'colorBrightness');
+  if (colorBrightness !== undefined) light.color.brightness = colorBrightness;
+  const mode = readLightMode(controls.colorMode);
+  if (mode !== undefined) light.mode = mode;
+  return light;
+}
+
+/**
  * Work out what a device can show in Matter from its catalog entry
  *
- * The outlets are the switches of the device's main function, in its `device` component. The setting switches are its
+ * The lights are its components named `light`, or `light1`, `light2`... on a device with several. The outlets are the switches of the device's main function, in its `device` component. The setting switches are its
  * other switches, those the catalog marks as changing how the device behaves, and the `on` switch of each component
  * that is a light of the device, such as its backlight. Each sensor kind takes the first reading of its measure, one
  * of the device's main function before a diagnostic one. A component outside `SUPPORTED_COMPONENTS` gives nothing.
@@ -227,7 +353,11 @@ function pickMeter(component: string, sensors: [string, TuyaControl][]): MeterFe
  * @returns {DeviceFeatures} The features, empty lists when there is none.
  */
 export function getDeviceFeatures(entry: TuyaDeviceEntry): DeviceFeatures {
-  const features: DeviceFeatures = { outlets: [], settingSwitches: [], sensors: [] };
+  const features: DeviceFeatures = { lights: [], outlets: [], settingSwitches: [], sensors: [] };
+  for (const [component, controls] of Object.entries(entry.components).filter(([name]) => lightComponentPattern.test(name))) {
+    const light = readLight(component, controls);
+    if (light !== undefined) features.lights.push(light);
+  }
   const device = entry.components.device ?? {};
   for (const [name, control] of Object.entries(device)) {
     if (control.kind !== 'switch' || control.readOnly === true) continue;

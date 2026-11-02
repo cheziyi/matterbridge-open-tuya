@@ -7,7 +7,7 @@
 import { TuyaError } from 'open-tuya';
 
 import { findGateway, getDeviceSupport, isGateway, probeDevice } from '../../src/setup/probe.js';
-import { createCloudDevice, createFakeRoute, leakFile, lightFile, motionModel, motionProductKey, plugFile } from '../fakeTuya.js';
+import { createCloudDevice, createFakeRoute, leakFile, fanFile, motionModel, motionProductKey, plugFile } from '../fakeTuya.js';
 
 const plugDataPoints = { '1': true, '2': 0, '4': 53, '5': 123, '6': 2305 };
 
@@ -31,7 +31,7 @@ describe('probe', () => {
     const devices = [gateway, behind, plug];
     expect(getDeviceSupport(plug, devices)).toBe('supported');
     expect(getDeviceSupport(gateway, devices)).toBe('gateway');
-    expect(getDeviceSupport(createCloudDevice(lightFile), devices)).toBe('otherKind');
+    expect(getDeviceSupport(createCloudDevice(fanFile), devices)).toBe('otherKind');
     expect(getDeviceSupport({ ...plug, productKey: 'unknownproduct00' }, devices)).toBe('unknownProduct');
   });
 
@@ -73,7 +73,7 @@ describe('probe', () => {
   test('should say why the plugin does not control a device it reads', async () => {
     const unknown = await probeDevice({ ...plug, productKey: 'unknownproduct00' }, [createFakeRoute({ '999': 'x' })]);
     expect(unknown).toMatchObject({ status: 'unsupported', message: 'The device catalog of open-tuya does not know this device yet' });
-    const light = await probeDevice(createCloudDevice(lightFile), [createFakeRoute({})]);
+    const light = await probeDevice(createCloudDevice(fanFile), [createFakeRoute({})]);
     expect(light.status).toBe('unsupported');
     expect(light.message).toMatch(/^It is a kind of device the plugin does not control yet: /);
     const feeder = await probeDevice(createCloudDevice('advwin_6l_petfeeder.yaml'), [createFakeRoute({})]);
