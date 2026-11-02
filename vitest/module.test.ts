@@ -946,6 +946,9 @@ describe('TuyaPlatform', () => {
      */
     async function startPlatform(devices: TuyaDeviceConfig[] = []): Promise<ListingCloud> {
       net.listed = [];
+      // The routes of the platform before are forgotten: a test that waits for a route then waits for one this platform creates, never takes a stale one.
+      net.lan.clear();
+      net.cloud.clear();
       platform = await createStoredPlatform({ account, devices });
       addMatterbridge(platform);
       await platform.onStart('test');
