@@ -1,6 +1,6 @@
 /**
  * @file src/module.ts
- * @description This file contains the Matterbridge platform for Tuya switches, plugs and sensors controlled on the LAN and through the Tuya cloud.
+ * @description This file contains the Matterbridge platform for Tuya lights, switches, plugs and sensors controlled on the LAN and through the Tuya cloud.
  * @author Calvin Che
  * @contributor Luca Liguori
  * @created 2026-10-29
