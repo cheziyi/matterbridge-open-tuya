@@ -30,7 +30,7 @@ import {
   createModelDeviceConfig,
   type FakeRoute,
   leakFile,
-  lightFile,
+  fanFile,
   motionModel,
   motionProductKey,
   plugFile,
@@ -137,14 +137,14 @@ const benchId = 'bf0000000000000002aa';
 const gatewayId = 'bf00000000000000gw01';
 const nodeDeviceId = 'a4c13800000000000001';
 const nodeId = 'a4c1380000000001';
-const lightId = 'bf0000000000000003aa';
+const fanId = 'bf0000000000000003aa';
 const motionId = 'bf0000000000000004aa';
 
 const desk = createDeviceConfig(plugFile, { deviceId: deskId, name: 'Desk', localKey: '0123456789abcdef' });
 const listedDesk = createCloudDevice(plugFile, { deviceId: deskId, name: 'Desk plug' });
 const listedGateway = createCloudDevice(plugFile, { deviceId: gatewayId, name: 'Hub', productKey: 'gatewayproduct00', localKey: 'gatewaykey000001', category: 'wg2' });
 const listedNode = createCloudDevice(plugFile, { deviceId: nodeDeviceId, name: 'Zigbee plug', nodeId, localKey: 'gatewaykey000001' });
-const listedLight = createCloudDevice(lightFile, { deviceId: lightId, name: 'Path lights', category: 'dj' });
+const listedFan = createCloudDevice(fanFile, { deviceId: fanId, name: 'Ceiling fan', category: 'fs' });
 const listedBench = createCloudDevice(stripFile, { deviceId: benchId, name: 'Bench strip', category: 'pc' });
 
 /**
@@ -311,7 +311,7 @@ describe('TuyaPlatform', () => {
   });
 
   test('should start the stored devices through the cloud while the LAN has not heard them', async () => {
-    net.listed = [listedDesk, listedGateway, listedNode, listedLight, listedBench];
+    net.listed = [listedDesk, listedGateway, listedNode, listedFan, listedBench];
     net.dataPoints.set(deskId, plugDataPoints);
     await platform.onStart('Vitest');
     expect(log.info).toHaveBeenCalledWith(`Starting platform ${pluginName} with reason: Vitest...`);
@@ -355,8 +355,8 @@ describe('TuyaPlatform', () => {
     expect(byId.get(deskId)).toMatchObject({ support: 'supported', isConfigured: true, hasLocalKey: true, lan: { host: '192.168.1.20', version: '3.3' } });
     expect(byId.get(gatewayId)).toMatchObject({ support: 'gateway', isConfigured: false });
     expect(byId.get(nodeDeviceId)).toMatchObject({ support: 'supported', nodeId, gatewayId, lan: { host: '192.168.1.30' } });
-    expect(byId.get(lightId)).toMatchObject({ support: 'otherKind' });
-    expect(byId.get(lightId)?.lan).toBeUndefined();
+    expect(byId.get(fanId)).toMatchObject({ support: 'otherKind' });
+    expect(byId.get(fanId)?.lan).toBeUndefined();
     expect(JSON.stringify(devices)).not.toContain('gatewaykey000001');
   });
 
@@ -464,7 +464,7 @@ describe('TuyaPlatform', () => {
   });
 
   test('should take a new local key from the device list, and reconnect the device with it', async () => {
-    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedLight, listedBench];
+    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedFan, listedBench];
     vi.mocked(createLocalTuyaClient).mockClear();
     await platform.syncDevices();
     expect(log.notice).toHaveBeenCalledWith('"Lamp" has a new local key');
@@ -473,19 +473,19 @@ describe('TuyaPlatform', () => {
     // A list with nothing new stores nothing, nor one that leaves a stored device out.
     writeSetup.mockClear();
     await platform.syncDevices();
-    net.listed = [listedGateway, listedNode, { ...listedLight, category: '', localKey: undefined }, listedBench];
+    net.listed = [listedGateway, listedNode, { ...listedFan, category: '', localKey: undefined }, listedBench];
     await platform.syncDevices();
     expect(writeSetup).not.toHaveBeenCalled();
     expect((await storedDevice(deskId))?.localKey).toBe('fedcba9876543210');
     // A device the list gives no local key for keeps the stored one when the page saves it.
-    net.listed = [{ ...listedDesk, localKey: undefined }, listedGateway, listedNode, { ...listedLight, category: '', localKey: undefined }, listedBench];
+    net.listed = [{ ...listedDesk, localKey: undefined }, listedGateway, listedNode, { ...listedFan, category: '', localKey: undefined }, listedBench];
     await platform.syncDevices();
     await platform.saveDevice({ ...desk, name: 'Lamp', hiddenFeatures: ['meter'], host: '10.0.0.5', version: '3.4' });
     expect(await storedDevice(deskId)).toMatchObject({ localKey: 'fedcba9876543210', cloudName: 'Desk plug' });
     // A device the cloud gives no local key is checked through the cloud alone.
-    net.dataPoints.set(lightId, {});
-    expect((await platform.probe(lightId)).status).toBe('unsupported');
-    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedLight, listedBench];
+    net.dataPoints.set(fanId, {});
+    expect((await platform.probe(fanId)).status).toBe('unsupported');
+    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedFan, listedBench];
     await platform.syncDevices();
   });
 
@@ -495,7 +495,7 @@ describe('TuyaPlatform', () => {
       { ...listedDesk, localKey: 'fedcba9876543210' },
       { ...listedGateway, localKey: 'gatewaykey000002' },
       { ...listedNode, localKey: 'gatewaykey000002' },
-      listedLight,
+      listedFan,
       listedBench,
     ];
     vi.mocked(createLocalTuyaClient).mockClear();
@@ -508,7 +508,7 @@ describe('TuyaPlatform', () => {
       expect((await platform.getSetupState()).devices.find((device) => device.deviceId === nodeDeviceId)).toMatchObject({ status: 'online', route: 'lan' }),
     );
     // Back to the key of before, for the tests that follow.
-    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedLight, listedBench];
+    net.listed = [{ ...listedDesk, localKey: 'fedcba9876543210' }, listedGateway, listedNode, listedFan, listedBench];
     await platform.syncDevices();
     expect((await storedDevice(nodeDeviceId))?.localKey).toBe('gatewaykey000001');
   });

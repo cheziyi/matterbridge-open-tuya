@@ -25,18 +25,26 @@ import type { MatterbridgeEndpoint } from 'matterbridge';
 import type { AnsiLogger } from 'matterbridge/logger';
 import { type ActionContext, Node } from 'matterbridge/matter';
 import { BridgedDeviceBasicInformation, OnOff } from 'matterbridge/matter/clusters';
-import type { ControlValues, DataPoints, RoutedTuyaClient, TuyaDeviceEntry, TuyaErrorCode } from 'open-tuya';
+import type { ControlValue, ControlValues, DataPoints, RoutedTuyaClient, TuyaDeviceEntry, TuyaErrorCode } from 'open-tuya';
 
 import type { TuyaDeviceConfig } from '../config.js';
 import { getErrorCode, getErrorMessage, ignoreFailure } from '../errors.js';
-import { type DeviceFeatures, readValue, type SwitchFeature } from '../features.js';
+import { type DeviceFeatures, type LightFeature, readValue, type SwitchFeature } from '../features.js';
 import { EndpointIds } from '../platform/endpointIds.js';
 import { applyDeviceLabel, createMainEndpoint, createSideEndpoint, type EndpointIdentity } from './endpoints.js';
 import { type AccessoryLayout, getAccessoryLayout, type LayoutUnit } from './layout.js';
+import { getLightControls, type LightChange, readMatterLight } from './lightControl.js';
 import { type AccessoryEndpoints, applyValues } from './matterState.js';
 
 /** How many reads in a row have to fail before the device is reported as unreachable. */
 const unreachableAfterFailures = 2;
+
+/**
+ * How long the changes a controller makes to a light are gathered before they are written to the device, in ms: one
+ * command sets several attributes, such as a hue and a saturation, and an app sends several commands for one action,
+ * such as on and a level, which the device takes as one write.
+ */
+export const lightWriteDelayMs = 50;
 
 /** The route a device answers through: the LAN, directly or through its gateway, or the cloud. */
 export type DeviceRoute = 'lan' | 'cloud';
@@ -115,8 +123,9 @@ function mergeValues(known: ControlValues | undefined, pushed: ControlValues): C
 export const noRouteMessage = 'The device has no route: sign in to a Tuya account, or let the plugin hear it on your network';
 
 /**
- * One Tuya device and the Matter endpoints that stand for it: its first outlet, or its first sensor, with its meter and
- * its battery, and, as they are exposed, its other outlets, its other sensors and its setting switches. Each is a device
+ * One Tuya device and the Matter endpoints that stand for it: its first light, else its first outlet, else its first
+ * sensor, with its meter and its battery, and, as they are exposed, its other lights, its other outlets, its other
+ * sensors and its setting switches. Each is a device
  * of its own in Matter, or a part of the main one when the device is exposed as a composed one.
  *
  * The endpoints are built in `endpoints.ts` and what the device reports is written to Matter in `matterState.ts`. This
@@ -150,7 +159,9 @@ export class TuyaAccessory implements AccessoryEndpoints {
   private lastErrorCode: TuyaErrorCode | undefined;
   private failureCount = 0;
   private isDisposed = false;
-  /** The last write asked of each switch, by its feature: a write that ended behind a newer one says nothing of what the controller wants. */
+  /** The changes of each light a controller made that are not written yet, by its feature. */
+  private readonly pendingLights = new Map<string, Set<LightChange>>();
+  /** The last write asked of each switch or light, by its feature: a write that ended behind a newer one says nothing of what the controller wants. */
   private readonly latestWrites = new Map<string, number>();
   private writeCount = 0;
   // Reads and writes run one after the other, so a read never overwrites what a write is about to send.
@@ -164,7 +175,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
    * No client is built until `start`.
    *
    * @param {TuyaAccessoryOptions} options The device, its features, the factory of its client and the logger.
-   * @throws {Error} When the device has neither an outlet nor a sensor to show.
+   * @throws {Error} When the device has no light, no outlet and no sensor to show.
    */
   constructor(options: TuyaAccessoryOptions) {
     this.entry = options.entry;
@@ -172,7 +183,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
     this.createConnection = options.createConnection;
     this.name = options.config.name;
     const layout = getAccessoryLayout(options.config, options.features);
-    if (layout === undefined) throw new Error('The device has neither an outlet nor a sensor to show in Matter');
+    if (layout === undefined) throw new Error('The device has no light, no outlet and no sensor to show in Matter');
     this.layout = layout;
     this.identity = { label: this.name, serial: options.config.deviceId, productName: options.productName, vendorId: options.vendorId, ids: options.ids ?? new EndpointIds() };
     this.endpoint = createMainEndpoint(this.identity, layout);
@@ -335,9 +346,13 @@ export class TuyaAccessory implements AccessoryEndpoints {
     }
   }
 
-  // Subscribes to the on/off of an outlet or a setting switch. A sensor takes no write.
+  // Subscribes to the on/off of an outlet or a setting switch, and to what a controller sets of a light. A sensor takes no write.
   private subscribeUnit(endpoint: MatterbridgeEndpoint, unit: LayoutUnit): void {
     if (unit.type === 'sensor') return;
+    if (unit.type === 'light') {
+      this.subscribeLight(endpoint, unit.feature);
+      return;
+    }
     const { feature } = unit;
     this.listen(endpoint, () =>
       endpoint.subscribeAttribute(OnOff, 'onOff', (isOn: boolean, _wasOn: boolean, context: ActionContext) => {
@@ -353,7 +368,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
    * last app it was in. The reset drops what was subscribed on each endpoint, so that the writes of the next app it is
    * paired with would reach nothing.
    *
-   * Each endpoint subscribes to one attribute: the on/off of its outlet or its switch.
+   * Each endpoint subscribes to the on/off of its outlet or its switch, or to the attributes a controller sets of its light.
    *
    * @param {MatterbridgeEndpoint} endpoint The endpoint.
    * @param {() => void} subscribe Subscribes to the attribute, now and after each reset.
@@ -405,16 +420,88 @@ export class TuyaAccessory implements AccessoryEndpoints {
     return true;
   }
 
+  /**
+   * Subscribe to the attributes a controller sets of a light: its on/off, its level, and its colour
+   *
+   * @param {MatterbridgeEndpoint} endpoint The endpoint of the light.
+   * @param {LightFeature} light The light.
+   * @returns {void}
+   */
+  private subscribeLight(endpoint: MatterbridgeEndpoint, light: LightFeature): void {
+    const attributes: [string, string, LightChange][] = [
+      ['OnOff', 'onOff', 'onOff'],
+      ['LevelControl', 'currentLevel', 'level'],
+      ...['currentHue', 'currentSaturation', 'colorTemperatureMireds', 'currentX', 'currentY'].map((attribute): [string, string, LightChange] => [
+        'ColorControl',
+        attribute,
+        'color',
+      ]),
+    ];
+    const present = attributes.filter(([cluster, attribute]) => endpoint.hasAttributeServer(cluster, attribute));
+    this.listen(endpoint, () => {
+      for (const [cluster, attribute, change] of present) {
+        endpoint.subscribeAttribute(cluster, attribute, (_value: unknown, _previous: unknown, context: ActionContext) => {
+          if (isControllerWrite(context)) this.gatherLightChange(endpoint, light, change);
+        });
+      }
+    });
+  }
+
+  /**
+   * Gather a change a controller made to a light, and write the changes gathered once `lightWriteDelayMs` has passed
+   *
+   * @param {MatterbridgeEndpoint} endpoint The endpoint of the light.
+   * @param {LightFeature} light The light.
+   * @param {LightChange} change What changed.
+   * @returns {void}
+   */
+  private gatherLightChange(endpoint: MatterbridgeEndpoint, light: LightFeature, change: LightChange): void {
+    const pending = this.pendingLights.get(light.id);
+    if (pending !== undefined) {
+      pending.add(change);
+      return;
+    }
+    const changes = new Set([change]);
+    this.pendingLights.set(light.id, changes);
+    setTimeout(() => {
+      this.pendingLights.delete(light.id);
+      void this.writeLight(endpoint, light, changes);
+    }, lightWriteDelayMs);
+  }
+
+  private async writeLight(endpoint: MatterbridgeEndpoint, light: LightFeature, changes: ReadonlySet<LightChange>): Promise<void> {
+    if (this.isDisposed) return;
+    const controls = getLightControls(light, readMatterLight(endpoint), changes, this.values ?? {});
+    const entries = Object.entries(controls);
+    if (entries.length === 0) return;
+    const what = `${light.label.toLowerCase()} ${entries.map(([control, value]) => `${control} ${String(value)}`).join(', ')}`;
+    await this.writeFeature(light.id, { [light.component]: controls }, what, (values) => ({ [light.component]: values[light.component] ?? {} }));
+  }
+
   private async writeSwitch(feature: SwitchFeature, isOn: boolean): Promise<void> {
     if (this.isDisposed) return;
     const what = `${feature.label.toLowerCase()} ${isOn ? 'on' : 'off'}`;
+    await this.writeFeature(feature.id, { [feature.component]: { [feature.control]: isOn } }, what, (values) => ({
+      [feature.component]: { [feature.control]: readValue(values, feature) ?? !isOn },
+    }));
+  }
+
+  /**
+   * Write controls of one feature to the device, and show in Matter what the device holds afterwards
+   *
+   * @param {string} id The id of the feature, which tells a newer write to it apart.
+   * @param {Record<string, Record<string, ControlValue>>} written The controls to write, by component.
+   * @param {string} what What is written, for the log, such as `power on`.
+   * @param {(values: ControlValues) => ControlValues} undo Gives the controls that put Matter back as the device last reported it, from every control last known, when the device did not take the write and cannot be read.
+   * @returns {Promise<void>} Resolves when the write is done, or failed and is undone.
+   */
+  private async writeFeature(id: string, written: Record<string, Record<string, ControlValue>>, what: string, undo: (values: ControlValues) => ControlValues): Promise<void> {
     this.log.info(`"${this.name}" received ${what}`);
     this.writeCount += 1;
     const write = this.writeCount;
-    this.latestWrites.set(feature.id, write);
+    this.latestWrites.set(id, write);
     await this.enqueue(async () => {
       const client = this.connection?.client;
-      const written = { [feature.component]: { [feature.control]: isOn } };
       try {
         if (client === undefined) throw new Error(noRouteMessage);
         await client.writeControls(written);
@@ -423,13 +510,13 @@ export class TuyaAccessory implements AccessoryEndpoints {
         if (this.isDisposed) return;
         // A read that was going on as the controller wrote may have put the old value back in Matter. A newer write
         // leaves Matter showing what the controller last asked for.
-        await this.apply(mergeValues(this.values, written), this.latestWrites.get(feature.id) === write ? written : {});
+        await this.apply(mergeValues(this.values, written), this.latestWrites.get(id) === write ? written : {});
       } catch (error) {
         this.recordError(error);
         this.log.error(`"${this.name}" did not take ${what}: ${getErrorMessage(error)}`);
         if (this.isDisposed) return;
         // Read back what the device holds, which undoes the request in Matter.
-        if (!(await this.readAndApply()) && this.latestWrites.get(feature.id) === write) await this.undoWrite(feature, isOn);
+        if (!(await this.readAndApply()) && this.latestWrites.get(id) === write) await this.undoWrite(undo);
       }
     });
   }
@@ -437,16 +524,15 @@ export class TuyaAccessory implements AccessoryEndpoints {
   /**
    * Undo a write in Matter when the device did not take it and its state cannot be read back either
    *
-   * @param {SwitchFeature} feature The switch that was written.
-   * @param {boolean} isOn What the controller asked for.
-   * @returns {Promise<void>} Resolves when the switch shows what the device last reported, or else what it showed before the request.
+   * @param {(values: ControlValues) => ControlValues} undo Gives the controls that put Matter back, from every control last known.
+   * @returns {Promise<void>} Resolves when the feature shows what the device last reported, or else what it showed before the request.
    */
-  private async undoWrite(feature: SwitchFeature, isOn: boolean): Promise<void> {
+  private async undoWrite(undo: (values: ControlValues) => ControlValues): Promise<void> {
     // The read once the node is online writes the state of the device.
     if (this.isWaitingForNode()) return;
     const values = this.values ?? {};
     try {
-      await applyValues(this, this.layout, values, { [feature.component]: { [feature.control]: readValue(values, feature) ?? !isOn } });
+      await applyValues(this, this.layout, values, undo(values));
     } catch (error) {
       this.log.warn(`"${this.name}" state could not be written to Matter: ${getErrorMessage(error)}`);
     }
