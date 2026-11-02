@@ -25,13 +25,17 @@ import { createHash } from 'node:crypto';
 
 import {
   bridgedNode,
+  colorTemperatureLight,
   contactSensor,
   type DeviceTypeDefinition,
+  dimmableLight,
   electricalSensor,
+  extendedColorLight,
   humiditySensor,
   lightSensor,
   MatterbridgeEndpoint,
   occupancySensor,
+  onOffLight,
   onOffPlugInUnit,
   powerSource,
   temperatureSensor,
@@ -42,8 +46,8 @@ import { BridgedDeviceBasicInformation, PowerSource } from 'matterbridge/matter/
 import type { Semtag } from 'matterbridge/matter/types';
 
 import { maxDeviceNameLength } from '../config.js';
-import type { SensorKind } from '../features.js';
-import { composeDeviceName } from '../mapping.js';
+import type { LightFeature, SensorKind } from '../features.js';
+import { composeDeviceName, toMiredsRange, type ValueRange } from '../mapping.js';
 import type { EndpointIds } from '../platform/endpointIds.js';
 import type { AccessoryLayout, LayoutUnit } from './layout.js';
 
@@ -81,6 +85,52 @@ const sensorDeviceTypes: Readonly<Record<SensorKind, DeviceTypeDefinition>> = {
   contact: contactSensor,
   waterLeak: waterLeakDetector,
 };
+
+/** The colour temperatures a light that shows only colours offers in Matter, in K: from a warm white to a cold one. */
+const colorOnlyKelvins: ValueRange = { min: 2000, max: 6500 };
+
+/**
+ * Get the device type of a light, from what it can do
+ *
+ * @param {LightFeature} light The light.
+ * @returns {DeviceTypeDefinition} An extended colour light for one with a colour, a colour temperature light for one with a white of a colour temperature, a dimmable light for one with a brightness, else an on/off light.
+ */
+function getLightDeviceType(light: LightFeature): DeviceTypeDefinition {
+  if (light.color !== undefined) return extendedColorLight;
+  if (light.colorTemperature !== undefined) return colorTemperatureLight;
+  return light.brightness === undefined ? onOffLight : dimmableLight;
+}
+
+/**
+ * Get the range of colour temperatures a light offers in Matter, in K
+ *
+ * @param {LightFeature} light The light, with a colour or a colour temperature.
+ * @returns {ValueRange} The range of its colour temperature, or the whites a light that shows only colours comes nearest to.
+ */
+export function getLightKelvins(light: LightFeature): ValueRange {
+  return light.colorTemperature ?? colorOnlyKelvins;
+}
+
+/**
+ * Add the clusters of a light: its on/off, its level when it has a brightness, and its colour
+ *
+ * An extended colour light takes the colour as a hue and a saturation, as x and y, and as a colour temperature, which
+ * Matter requires of it: a light that shows only colours takes a colour temperature as the colour nearest to it.
+ *
+ * @param {MatterbridgeEndpoint} endpoint The endpoint.
+ * @param {LightFeature} light The light.
+ * @returns {void}
+ */
+function addLightClusters(endpoint: MatterbridgeEndpoint, light: LightFeature): void {
+  endpoint.createDefaultOnOffClusterServer(false);
+  if (light.brightness === undefined && light.color === undefined && light.colorTemperature === undefined) return;
+  endpoint.createDefaultLevelControlClusterServer();
+  if (light.color === undefined && light.colorTemperature === undefined) return;
+  const mireds = toMiredsRange(getLightKelvins(light));
+  const middle = Math.round((mireds.min + mireds.max) / 2);
+  if (light.color === undefined) endpoint.createCtColorControlClusterServer(middle, mireds.min, mireds.max);
+  else endpoint.createDefaultColorControlClusterServer(0, 0, 0, 0, middle, mireds.min, mireds.max);
+}
 
 /**
  * Get the name of a device in Matterbridge, which never changes
@@ -168,6 +218,7 @@ function setInitialLabel(endpoint: MatterbridgeEndpoint, identity: EndpointIdent
  * @returns {DeviceTypeDefinition} The device type.
  */
 function getDeviceType(unit: LayoutUnit): DeviceTypeDefinition {
+  if (unit.type === 'light') return getLightDeviceType(unit.feature);
   return unit.type === 'sensor' ? sensorDeviceTypes[unit.feature.kind] : onOffPlugInUnit;
 }
 
@@ -223,6 +274,10 @@ function addPowerSource(endpoint: MatterbridgeEndpoint, layout: AccessoryLayout)
  * @returns {void}
  */
 function addUnitClusters(endpoint: MatterbridgeEndpoint, unit: LayoutUnit): void {
+  if (unit.type === 'light') {
+    addLightClusters(endpoint, unit.feature);
+    return;
+  }
   if (unit.type !== 'sensor') {
     // An outlet takes the on/off with the lighting feature, which Matter requires of it.
     endpoint.createDefaultOnOffClusterServer(false);
@@ -238,7 +293,7 @@ function addUnitClusters(endpoint: MatterbridgeEndpoint, unit: LayoutUnit): void
 }
 
 /**
- * Create the main endpoint of a device: its first outlet, or its first sensor
+ * Create the main endpoint of a device: its first light, else its first outlet, else its first sensor
  *
  * A device that measures what flows through its outlet is also an electrical sensor, with its power and its energy.
  * A device that runs on a battery has its charge as its power source, any other is wired.

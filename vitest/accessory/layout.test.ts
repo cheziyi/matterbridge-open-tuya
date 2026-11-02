@@ -40,8 +40,8 @@ describe('getAccessoryLayout', () => {
   });
 
   test('should lay out nothing for a device with no outlet and no sensor', () => {
-    expect(getAccessoryLayout(defaultExposure, { outlets: [], sensors: [], settingSwitches: [] })).toBeUndefined();
-    const settingOnly = { outlets: [], sensors: [], settingSwitches: [{ id: 'backlight.on', component: 'backlight', control: 'on', label: 'Backlight' }] };
+    expect(getAccessoryLayout(defaultExposure, { lights: [], outlets: [], sensors: [], settingSwitches: [] })).toBeUndefined();
+    const settingOnly = { lights: [], outlets: [], sensors: [], settingSwitches: [{ id: 'backlight.on', component: 'backlight', control: 'on', label: 'Backlight' }] };
     expect(getAccessoryLayout(defaultExposure, settingOnly)).toBeUndefined();
   });
 

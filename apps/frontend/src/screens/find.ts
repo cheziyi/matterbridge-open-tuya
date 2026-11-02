@@ -38,7 +38,7 @@ function notesOf(device: ListedDevice): string[] {
   const notes: string[] = [];
   if (device.isConfigured) notes.push('Already set up.');
   if (device.support === 'unknownProduct') notes.push('The catalog does not list its product: the plugin checks its data points in the next step.');
-  if (device.support === 'otherKind') notes.push('A kind of device the plugin does not control yet, such as a light: only switches, plugs and sensors for now.');
+  if (device.support === 'otherKind') notes.push('A kind of device the plugin does not control yet, such as a fan: only lights, switches, plugs and sensors for now.');
   if (device.support === 'gateway') notes.push('A gateway: the devices behind it are listed on their own.');
   if (device.support === 'gateway' || device.support === 'otherKind') return notes;
   if (!device.online) notes.push('The Tuya cloud says it is offline.');

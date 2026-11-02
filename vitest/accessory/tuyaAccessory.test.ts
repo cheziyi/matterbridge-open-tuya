@@ -611,6 +611,7 @@ describe('TuyaAccessory', () => {
   describe('detectors and a meter of energy', () => {
     test('should show a water leak, an open contact and the energy used', async () => {
       const features: DeviceFeatures = {
+        lights: [],
         outlets: [{ id: 'device.on', component: 'device', control: 'on', label: 'Power' }],
         settingSwitches: [],
         sensors: [
@@ -652,13 +653,13 @@ describe('TuyaAccessory', () => {
           new TuyaAccessory({
             config: createDeviceConfig(leakFile),
             entry: entryOf(leakFile),
-            features: { outlets: [], settingSwitches: [], sensors: [] },
+            features: { lights: [], outlets: [], settingSwitches: [], sensors: [] },
             productName: 'Nothing',
             createConnection: (): undefined => undefined,
             log,
             vendorId,
           }),
-      ).toThrow('The device has neither an outlet nor a sensor to show in Matter');
+      ).toThrow('The device has no light, no outlet and no sensor to show in Matter');
     });
   });
 

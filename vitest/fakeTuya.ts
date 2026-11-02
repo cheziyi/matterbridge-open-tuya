@@ -19,8 +19,16 @@ export const stripFile = 'mirabella_power_strip.yaml';
 export const multiSensorFile = 'fourin1_motion_sensor.yaml';
 /** A water leak detector on a battery. */
 export const leakFile = 'meian_sw02_leakdetector.yaml';
-/** A light, which the plugin does not control. */
-export const lightFile = 'arlec_10_pathlights.yaml';
+/** A ceiling fan, which the plugin does not control. */
+export const fanFile = 'anwo_brezza_fan.yaml';
+/** A bulb of a colour, or a white of a colour temperature. */
+export const colorBulbFile = 'rgbcw_lightbulb.yaml';
+/** A bulb of a white of a colour temperature. */
+export const whiteBulbFile = 'cct_lightbulb.yaml';
+/** Path lights of a colour, or a white with no colour temperature. */
+export const pathLightsFile = 'arlec_10_pathlights.yaml';
+/** A module of two dimmers. */
+export const dualDimmerFile = 'dual_dimmer_module.yaml';
 
 /** A motion sensor that also reads the temperature, whose product the catalog does not list, as the cloud's model describes it. */
 export const motionModel: TuyaDeviceModel = {

@@ -25,7 +25,7 @@ import { goHome, saveDraft } from '../actions.js';
 import { type DeviceFeatures, type LanVersion, lanVersions, meterFeatureId } from '../api.js';
 import { button, notice, steps, unitHeader, unitStrip } from '../components.js';
 import { type Child, h } from '../dom.js';
-import { mainFeatureId } from '../drafts.js';
+import { hasMeter, mainFeatureId } from '../drafts.js';
 import { describeReadings } from '../readings.js';
 import { render } from '../render.js';
 import { currentDraft, deviceLabel, type Draft } from '../state.js';
@@ -86,8 +86,17 @@ function nameSection(draft: Draft): HTMLElement {
 
 function featureSection(draft: Draft, features: DeviceFeatures): HTMLElement {
   const main = mainFeatureId(features);
-  const mainFeature = [...features.outlets, ...features.sensors].find((feature) => feature.id === main);
+  const mainFeature = [...features.lights, ...features.outlets, ...features.sensors].find((feature) => feature.id === main);
   const items: Child[] = [];
+  for (const light of features.lights) {
+    if (light.id === main) continue;
+    items.push(
+      toggle(`feature-${light.id}`, !draft.hiddenFeatures.includes(light.id), light.label, `A light. ${placement(draft, light.label)}`, (isShown) => {
+        draft.hiddenFeatures = setShown(draft.hiddenFeatures, light.id, !isShown);
+        render();
+      }),
+    );
+  }
   for (const outlet of features.outlets) {
     if (outlet.id === main) continue;
     items.push(
@@ -97,10 +106,9 @@ function featureSection(draft: Draft, features: DeviceFeatures): HTMLElement {
       }),
     );
   }
-  if (features.meter !== undefined && features.outlets.length > 0) {
-    const measures = [features.meter.power && 'power', features.meter.voltage && 'voltage', features.meter.current && 'current', features.meter.energy && 'energy used'].filter(
-      (name) => typeof name === 'string',
-    );
+  const { meter } = features;
+  if (meter !== undefined && hasMeter(features)) {
+    const measures = [meter.power && 'power', meter.voltage && 'voltage', meter.current && 'current', meter.energy && 'energy used'].filter((name) => typeof name === 'string');
     items.push(
       toggle(
         'feature-meter',
@@ -152,7 +160,7 @@ function composedSection(draft: Draft): HTMLElement {
     'section',
     {},
     h('h2', {}, 'One device or several'),
-    h('p', { class: 'help' }, 'The other outlets, the sensors and the switches can be parts of the device in Matter, or devices of their own beside it.'),
+    h('p', { class: 'help' }, 'The other lights, the outlets, the sensors and the switches can be parts of the device in Matter, or devices of their own beside it.'),
     h(
       'div',
       { class: 'choices' },
@@ -250,7 +258,7 @@ function connectionSection(draft: Draft): HTMLElement {
 export function optionsScreen(): Child[] {
   const draft = currentDraft();
   if (draft === undefined) return [notice()];
-  const features = draft.features ?? { outlets: [], settingSwitches: [], sensors: [] };
+  const features = draft.features ?? { lights: [], outlets: [], settingSwitches: [], sensors: [] };
   const readings = describeReadings(draft.features, draft.values);
   return [
     steps(),
