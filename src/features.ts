@@ -274,6 +274,13 @@ function pickMeter(component: string, sensors: [string, TuyaControl][]): MeterFe
 }
 
 /**
+ * The coldest minimum a colour temperature range may start at, in K: a lower one, such as the raw 0 to 1000 of a
+ * Tuya data point the catalog gives no target range for, would give a warmest colour temperature of over 1000
+ * mireds, up to one that no attribute of Matter holds.
+ */
+const minColorTemperatureInK = 1000;
+
+/**
  * Read the range of a number control a light is set by
  *
  * Edge cases:
@@ -283,12 +290,14 @@ function pickMeter(component: string, sensors: [string, TuyaControl][]): MeterFe
  *
  * @param {TuyaControl | undefined} control The control.
  * @param {string} name Its name.
- * @returns {RangedControl | undefined} The control and the range of its value, its raw range divided by its scale unless the catalog gives a target range.
+ * @returns {RangedControl | undefined} The control and the range of its value: the target range the catalog gives, else its raw range, divided by its scale, as open-tuya reads it.
  */
 function readRange(control: TuyaControl | undefined, name: string): RangedControl | undefined {
   if (control?.kind !== 'number' || control.readOnly === true) return undefined;
   const scale = control.scale ?? 1;
-  const ends = control.targetRange === undefined ? [(control.min ?? Number.NaN) / scale, (control.max ?? Number.NaN) / scale] : [control.targetRange.min, control.targetRange.max];
+  const ends = (control.targetRange === undefined ? [control.min ?? Number.NaN, control.max ?? Number.NaN] : [control.targetRange.min, control.targetRange.max]).map(
+    (end) => end / scale,
+  );
   const min = Math.min(...ends);
   const max = Math.max(...ends);
   if (!Number.isFinite(min) || !Number.isFinite(max) || max <= min) return undefined;
@@ -316,6 +325,7 @@ function readLightMode(control: TuyaControl | undefined): LightModeControl | und
  *
  * Edge cases:
  *  - a component without a switch it can be turned on and off by -> undefined
+ *  - a colour temperature that starts below `minColorTemperatureInK` is left out: the light is dimmable, or shows its colours
  *  - a colour needs both a hue and a saturation, and the mode control is kept only with a colour
  *
  * @param {string} component The name of the component, such as `light` or `light2`.
@@ -329,7 +339,7 @@ function readLight(component: string, controls: TuyaComponent): LightFeature | u
   const brightness = readRange(controls.brightness, 'brightness');
   if (brightness !== undefined) light.brightness = brightness;
   const colorTemperature = readRange(controls.colorTemperatureInK, 'colorTemperatureInK');
-  if (colorTemperature !== undefined) light.colorTemperature = colorTemperature;
+  if (colorTemperature !== undefined && colorTemperature.min >= minColorTemperatureInK) light.colorTemperature = colorTemperature;
   const hue = readRange(controls.hue, 'hue');
   const saturation = readRange(controls.saturation, 'saturation');
   if (hue === undefined || saturation === undefined) return light;

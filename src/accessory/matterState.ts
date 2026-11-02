@@ -38,6 +38,7 @@ import {
 import type { ControlValues } from 'open-tuya';
 
 import { type LightFeature, readValue } from '../features.js';
+import { getBrightness, isShowingColor } from '../lightState.js';
 import {
   criticalBatteryInPercent,
   lowBatteryInPercent,
@@ -65,23 +66,6 @@ export interface AccessoryEndpoints {
 }
 
 /**
- * Tell whether a light shows its colour now, rather than its white
- *
- * Edge cases:
- *  - a light without a mode control shows its colour when it has no white brightness
- *  - a mode such as a scene is no colour
- *
- * @param {LightFeature} light The light.
- * @param {ControlValues} values Every control the device reports, as last known.
- * @returns {boolean} True while it shows its colour.
- */
-export function isShowingColor(light: LightFeature, values: ControlValues): boolean {
-  if (light.color === undefined) return false;
-  if (light.mode === undefined) return light.brightness === undefined;
-  return readValue(values, { component: light.component, control: light.mode.control }) === light.mode.color;
-}
-
-/**
  * Write what a light reports to its endpoint
  *
  * The level is the brightness of its colour while it shows its colour, and the brightness of its white otherwise.
@@ -89,7 +73,7 @@ export function isShowingColor(light: LightFeature, values: ControlValues): bool
  * Edge cases:
  *  - written only when the changed values carry a control of the light: then every attribute is written from every control last known, since a change of its mode changes what its level is
  *  - a value that is not a number keeps what the endpoint shows
- *  - the colour mode follows the mode of the light: its colour, or the colour temperature of its white
+ *  - the colour mode follows the mode of the light: its colour, or the colour temperature of its white, which a white of no colour temperature shows as well, so that the stale colour is not shown
  *
  * @param {MatterbridgeEndpoint} endpoint The endpoint of the light.
  * @param {LightFeature} light The light.
@@ -103,7 +87,7 @@ async function applyLight(endpoint: MatterbridgeEndpoint, light: LightFeature, v
   const isOn = read(light.control);
   if (isOn !== undefined) await endpoint.updateAttribute(OnOff, 'onOff', toBoolean(isOn));
   const isColor = isShowingColor(light, values);
-  const brightness = isColor && light.color?.brightness !== undefined ? light.color.brightness : (light.brightness ?? light.color?.brightness);
+  const brightness = getBrightness(light, isColor);
   const level = brightness === undefined ? null : toMatterLevel(read(brightness.control), brightness);
   if (level !== null) await endpoint.updateAttribute(LevelControl, 'currentLevel', level);
   if (light.colorTemperature !== undefined) {
@@ -124,7 +108,9 @@ async function applyLight(endpoint: MatterbridgeEndpoint, light: LightFeature, v
     }
   }
   if (isColor) await setColorMode(endpoint, ColorControl.ColorMode.CurrentHueAndCurrentSaturation, ColorControl.EnhancedColorMode.CurrentHueAndCurrentSaturation);
-  else if (light.colorTemperature !== undefined) await setColorMode(endpoint, ColorControl.ColorMode.ColorTemperatureMireds, ColorControl.EnhancedColorMode.ColorTemperatureMireds);
+  else if (light.colorTemperature !== undefined || light.mode?.white !== undefined) {
+    await setColorMode(endpoint, ColorControl.ColorMode.ColorTemperatureMireds, ColorControl.EnhancedColorMode.ColorTemperatureMireds);
+  }
 }
 
 /**

@@ -161,6 +161,8 @@ export class TuyaAccessory implements AccessoryEndpoints {
   private isDisposed = false;
   /** The changes of each light a controller made that are not written yet, by its feature. */
   private readonly pendingLights = new Map<string, Set<LightChange>>();
+  /** The timer that writes the changes gathered of each light, by its feature, which disposing the device clears. */
+  private readonly lightTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** The last write asked of each switch or light, by its feature: a write that ended behind a newer one says nothing of what the controller wants. */
   private readonly latestWrites = new Map<string, number>();
   private writeCount = 0;
@@ -295,6 +297,9 @@ export class TuyaAccessory implements AccessoryEndpoints {
    */
   async dispose(): Promise<void> {
     this.isDisposed = true;
+    for (const timer of this.lightTimers.values()) clearTimeout(timer);
+    this.lightTimers.clear();
+    this.pendingLights.clear();
     await this.queue;
     await this.closeConnection();
   }
@@ -421,7 +426,9 @@ export class TuyaAccessory implements AccessoryEndpoints {
   }
 
   /**
-   * Subscribe to the attributes a controller sets of a light: its on/off, its level, and its colour
+   * Subscribe to the attributes a controller sets of a light: its on/off, its level, and its colour, with the colour
+   * mode: a switch between the colour and the white that leaves the attribute of the new mode as it was changes the
+   * mode alone
    *
    * @param {MatterbridgeEndpoint} endpoint The endpoint of the light.
    * @param {LightFeature} light The light.
@@ -431,7 +438,7 @@ export class TuyaAccessory implements AccessoryEndpoints {
     const attributes: [string, string, LightChange][] = [
       ['OnOff', 'onOff', 'onOff'],
       ['LevelControl', 'currentLevel', 'level'],
-      ...['currentHue', 'currentSaturation', 'colorTemperatureMireds', 'currentX', 'currentY'].map((attribute): [string, string, LightChange] => [
+      ...['colorMode', 'currentHue', 'currentSaturation', 'colorTemperatureMireds', 'currentX', 'currentY'].map((attribute): [string, string, LightChange] => [
         'ColorControl',
         attribute,
         'color',
@@ -463,19 +470,28 @@ export class TuyaAccessory implements AccessoryEndpoints {
     }
     const changes = new Set([change]);
     this.pendingLights.set(light.id, changes);
-    setTimeout(() => {
-      this.pendingLights.delete(light.id);
-      void this.writeLight(endpoint, light, changes);
-    }, lightWriteDelayMs);
+    this.lightTimers.set(
+      light.id,
+      setTimeout(() => {
+        this.lightTimers.delete(light.id);
+        this.pendingLights.delete(light.id);
+        void this.writeLight(endpoint, light, changes);
+      }, lightWriteDelayMs),
+    );
   }
 
+  // Runs once the changes gathered of a light are written: disposing the device clears the timer that calls it.
   private async writeLight(endpoint: MatterbridgeEndpoint, light: LightFeature, changes: ReadonlySet<LightChange>): Promise<void> {
-    if (this.isDisposed) return;
     const controls = getLightControls(light, readMatterLight(endpoint), changes, this.values ?? {});
     const entries = Object.entries(controls);
     if (entries.length === 0) return;
     const what = `${light.label.toLowerCase()} ${entries.map(([control, value]) => `${control} ${String(value)}`).join(', ')}`;
-    await this.writeFeature(light.id, { [light.component]: controls }, what, (values) => ({ [light.component]: values[light.component] ?? {} }));
+    const isOn = controls[light.control];
+    // The on/off is put back as it was before the request when the device never reported it, like that of a switch: the
+    // level and the colour it never reported stay as the controller asked, since what they were is not known.
+    await this.writeFeature(light.id, { [light.component]: controls }, what, (values) => ({
+      [light.component]: { ...values[light.component], ...(typeof isOn === 'boolean' && readValue(values, light) === undefined ? { [light.control]: !isOn } : {}) },
+    }));
   }
 
   private async writeSwitch(feature: SwitchFeature, isOn: boolean): Promise<void> {
@@ -531,8 +547,10 @@ export class TuyaAccessory implements AccessoryEndpoints {
     // The read once the node is online writes the state of the device.
     if (this.isWaitingForNode()) return;
     const values = this.values ?? {};
+    const put = undo(values);
     try {
-      await applyValues(this, this.layout, values, undo(values));
+      // A light is written from every control last known: the ones put back stand in for those the device never reported.
+      await applyValues(this, this.layout, mergeValues(values, put), put);
     } catch (error) {
       this.log.warn(`"${this.name}" state could not be written to Matter: ${getErrorMessage(error)}`);
     }
