@@ -19,7 +19,7 @@ It is a [Matterbridge](https://matterbridge.io) plugin built on [open-tuya](http
 - **It finds your devices for you.** Sign in once in the setup page, by scanning a QR code with the Smart Life app or with a cloud project of the Tuya developer platform, and it lists every device of your account, with whether it can control each one. There is no local key, device ID or configuration file to look up: see [Guided setup](#guided-setup).
 - **It talks to your devices on your network.** Each device is reached on the local network first, with the local key the cloud gives for it, which answers quicker and keeps working while the Tuya cloud or the internet is down, and through the Tuya cloud when it does not answer there: see [Connection](#connection).
 - **It reaches the devices behind a gateway.** A Zigbee or Bluetooth device behind a Tuya gateway is reached through the gateway on your network, and through the cloud otherwise.
-- **It offers only what your device can do.** The plugin reads what each device does from its catalog entry: each outlet of a power strip, the power and the energy of a plug that measures them, the temperature, the humidity, the light, the motion, the contact or the water leak of a sensor, its battery, and settings such as its child lock or the light of its buttons.
+- **It offers only what your device can do.** The plugin reads what each device does from its catalog entry: the brightness, the colour temperature and the colour of a light, each channel of a dimmer, each outlet of a power strip, the power and the energy of a plug that measures them, the temperature, the humidity, the light, the motion, the contact or the water leak of a sensor, its battery, and settings such as its child lock or the light of its buttons.
 - **It says when a device stops answering.** After two reads in a row fail, as they do while the Tuya cloud lists a device reached through it as offline, your Matter app shows the device as unreachable, and it comes back by itself as soon as the device answers again.
 - **Almost nothing needs a restart.** Sign in, add, rename, reconnect and remove devices while Matterbridge keeps running. Only a change of how a device appears in Matter waits for the next restart, which the setup page and Matterbridge ask for.
 
@@ -54,44 +54,47 @@ Open the plugin frontend from the plugin's row on the Matterbridge home page. Th
 
 Then it walks through three steps:
 
-1. **Find.** The page lists the devices of your account and marks those already set up. It says why it cannot control one: a kind of device it does not control yet, such as a light or a fan, or a gateway, whose devices are listed on their own. A device whose product the catalog does not list can still be picked: the next step reads what the Tuya cloud says of it.
+1. **Find.** The page lists the devices of your account and marks those already set up. It says why it cannot control one: a kind of device it does not control yet, such as a fan or a thermostat, or a gateway, whose devices are listed on their own. A device whose product the catalog does not list can still be picked: the next step reads what the Tuya cloud says of it.
 2. **Connect.** For each device you picked, the plugin reads it, on your network first and through the Tuya cloud otherwise, and finds what its data points do: from the catalog entry of its product, else from the Tuya cloud's model of a motion, presence, contact, water leak or temperature and humidity sensor, which names each data point by Tuya's standard codes, such as `temp_current`, else from the catalog entry that names most of the data points it reports. The model comes before that last match, which cannot tell apart two devices that report the same data points, such as a motion sensor and a water leak sensor.
-3. **Options.** The name the device gets in Matter, starting from its name in the Smart Life app, which of its outlets, its sensors, its meter and its setting switches appear in Matter, and whether they are one device or several. Last, whether it is reached on your network first or through the Tuya cloud only, and, only for a network the plugin does not hear it on, a host and a protocol version, which most devices leave empty: see [Connection](#connection).
+3. **Options.** The name the device gets in Matter, starting from its name in the Smart Life app, which of its lights, its outlets, its sensors, its meter and its setting switches appear in Matter, and whether they are one device or several. Last, whether it is reached on your network first or through the Tuya cloud only, and, only for a network the plugin does not hear it on, a host and a protocol version, which most devices leave empty: see [Connection](#connection).
 
 Afterwards the same page lists your devices with their status: online on your network or through the Tuya cloud, connecting, not answering, or not started, and what they last reported. From there you can add more, change the options of one, reconnect one that stopped answering, remove one, switch to another account, sign in again when the Tuya cloud no longer accepts the sign in, or sign out. Matterbridge's own list of devices shows a device added or removed here once you reload its page, named after its device ID, such as `Tuya bf1234567890abcdefgh`: the name you give it is what the Matter apps show.
 
 ## How a device appears in Matter
 
-The plugin controls the devices whose catalog entry is a switch, a plug, a power strip or a sensor, with the lights of their buttons or their display. A light, a fan, a thermostat, a cover, a lock, a vacuum and the other kinds of the catalog are not controlled yet.
+The plugin controls the devices whose catalog entry is a light, a dimmer, a switch, a plug, a power strip or a sensor, with the lights of their buttons or their display. A fan, a ceiling fan with a light, a thermostat, a cover, a lock, a vacuum and the other kinds of the catalog are not controlled yet.
 
-| In Matter                          | From the device                                                                                                     |
-| ---------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Outlet                             | Each switch of its main function: the plug, each outlet of a power strip, each gang of a wall switch, its USB ports |
-| Electrical power and energy        | The power, the voltage, the current and the energy used so far, on the first outlet of a device that measures them  |
-| Temperature sensor                 | Its temperature, in °C or °F                                                                                        |
-| Humidity sensor                    | Its relative humidity                                                                                               |
-| Light sensor                       | Its illuminance                                                                                                     |
-| Occupancy sensor                   | The motion or the presence it detects                                                                               |
-| Contact sensor                     | Whether its door or window is open                                                                                  |
-| Water leak detector                | Whether it detects water                                                                                            |
-| Battery                            | The charge of its battery, as the power source of the device                                                        |
-| Outlet, for a setting, when chosen | Each on/off setting, such as the child lock or the light of its buttons or its display                              |
+| In Matter                          | From the device                                                                                                                                                                                                |
+| ---------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Light                              | Each light, or each channel of a dimmer: an On/Off Light, a Dimmable Light with its brightness, a Color Temperature Light with the colour temperature of its white, or an Extended Color Light with its colour |
+| Outlet                             | Each switch of its main function: the plug, each outlet of a power strip, each gang of a wall switch, its USB ports                                                                                            |
+| Electrical power and energy        | The power, the voltage, the current and the energy used so far, on the first outlet of a device that measures them                                                                                             |
+| Temperature sensor                 | Its temperature, in °C or °F                                                                                                                                                                                   |
+| Humidity sensor                    | Its relative humidity                                                                                                                                                                                          |
+| Light sensor                       | Its illuminance                                                                                                                                                                                                |
+| Occupancy sensor                   | The motion or the presence it detects                                                                                                                                                                          |
+| Contact sensor                     | Whether its door or window is open                                                                                                                                                                             |
+| Water leak detector                | Whether it detects water                                                                                                                                                                                       |
+| Battery                            | The charge of its battery, as the power source of the device                                                                                                                                                   |
+| Outlet, for a setting, when chosen | Each on/off setting, such as the child lock or the light of its buttons or its display                                                                                                                         |
 
-The first outlet, or the first sensor of a device without one, is the device itself: it is always there. Every other outlet and sensor, and the meter, can be left out in the options. A setting switch is left out unless you choose it.
+The first light, else the first outlet, else the first sensor, is the device itself: it is always there. Every other light, outlet and sensor, and the meter, can be left out in the options. A setting switch is left out unless you choose it.
 
 ### How it is built in Matter
 
-Matter describes a device as endpoints. Each endpoint has one or more device types, which say what it is, and clusters, which hold its attributes and commands. Each device is one device: an endpoint for its first outlet or its first sensor, with every other outlet, sensor or setting switch as a part of it, on an endpoint of its own:
+Matter describes a device as endpoints. Each endpoint has one or more device types, which say what it is, and clusters, which hold its attributes and commands. Each device is one device: an endpoint for its first light, its first outlet or its first sensor, with every other light, outlet, sensor or setting switch as a part of it, on an endpoint of its own:
 
 ```mermaid
 flowchart TD
     bridge["Matterbridge<br/>Aggregator"]
     subgraph device["One device in a Matter app"]
-        main["<b>Desk Plug</b><br/>On/Off Plug-in Unit, or the sensor of a device without an outlet, Bridged Node, Power Source<br/>On/Off, and Electrical Sensor with Power Topology, Electrical Power and Electrical Energy Measurement on a device that measures them<br/>Power Source wired, or with the charge of its battery"]
+        main["<b>Desk Plug</b><br/>The light of a device with one, else On/Off Plug-in Unit, else the sensor, Bridged Node, Power Source<br/>On/Off, and Electrical Sensor with Power Topology, Electrical Power and Electrical Energy Measurement on a device that measures them<br/>Power Source wired, or with the charge of its battery"]
         outlets["On/Off Plug-in Unit, one for each other outlet and each setting switch<br/>tagged 1 Outlet 2, 2 Outlet 3 and so on<br/>On/Off"]
         sensors["Temperature, Humidity, Light, Occupancy, Contact Sensor or Water Leak Detector, one for each other reading<br/>Temperature, Relative Humidity, Illuminance Measurement, Occupancy Sensing or Boolean State"]
     end
+    lights["On/Off, Dimmable, Color Temperature or Extended Color Light, one for each other light<br/>On/Off, Level Control, and Color Control with its colour temperature, its hue and saturation and its x and y"]
     bridge --> main
+    main -.-> lights
     main -.-> outlets
     main -.-> sensors
 ```
@@ -134,6 +137,9 @@ The account and the devices are set up in the setup page alone. The Matterbridge
 
 - **The Smart Life session serves one program.** Two programs signed in with the same session, such as this plugin and Home Assistant with a copy of its configuration, end it for both: sign each in by a QR code of its own.
 - **A device on protocol 3.1 reads under a wrong local key.** A command that times out on one is the sign that its key is wrong: read the device list again from the setup page.
+- **A light shows its white and its colour, not its scenes.** A light in a scene or a music mode shows in Matter as its white, and a Matter app that sets a colour or a colour temperature turns it back to its colour or its white. The timer, the scenes and the other settings of a light are not in Matter.
+- **A light whose product the catalog does not list is matched by its data points.** The Tuya cloud's model names only sensors, so such a light takes the catalog entry that names most of the data points it reports, which most bulbs share.
+- **A light shows no meter.** A device with a light and an outlet that measures power shows the light as the device itself, without the meter.
 - **The meter shows the first phase.** A device that measures three phases shows the readings the catalog gives for the device as a whole, or none.
 - **A device that refuses a read.** Some 3.2 and 3.3 devices answer every read with an error. open-tuya can read them by writing null to their data points, which this plugin does not do, since a null write changes some devices: they are reached through the cloud instead.
 

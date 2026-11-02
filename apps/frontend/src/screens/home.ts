@@ -34,23 +34,27 @@ function joinList(parts: readonly string[]): string {
   return parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts[parts.length - 1]}`;
 }
 
-// Such as "an outlet, Outlet 2 and Outlet 3, the meter and a switch for the child lock, all as one device".
+// Such as "an outlet, Outlet 2 and Outlet 3, the meter and a switch for the child lock, all as one device", or "a light and Light 2".
 function describeExposure(device: StoredDevice): string {
   const { features } = device;
   if (features === undefined) return 'as it was set up';
   const main = mainFeatureId(features);
   const isShown = (id: string): boolean => id !== main && !device.hiddenFeatures.includes(id);
+  const lights = features.lights.filter((light) => isShown(light.id)).map((light) => light.label);
   const outlets = features.outlets.filter((outlet) => isShown(outlet.id)).map((outlet) => outlet.label);
   const sensors = features.sensors.filter((sensor) => isShown(sensor.id)).map((sensor) => sensor.label.toLowerCase());
   const settings = features.settingSwitches.filter((setting) => device.addedFeatures.includes(setting.id)).map((setting) => setting.label.toLowerCase());
-  const first = features.outlets.length > 0 ? 'an outlet' : `a ${features.sensors[0]?.label.toLowerCase() ?? ''} sensor`;
+  let first = `a ${features.sensors[0]?.label.toLowerCase() ?? ''} sensor`;
+  if (features.lights.length > 0) first = 'a light';
+  else if (features.outlets.length > 0) first = 'an outlet';
   const parts = [first];
+  if (lights.length > 0) parts.push(joinList(lights));
   if (outlets.length > 0) parts.push(joinList(outlets));
-  if (features.meter !== undefined && features.outlets.length > 0 && !device.hiddenFeatures.includes(meterFeatureId)) parts.push('the meter');
+  if (features.meter !== undefined && features.lights.length === 0 && features.outlets.length > 0 && !device.hiddenFeatures.includes(meterFeatureId)) parts.push('the meter');
   if (sensors.length > 0) parts.push(`a sensor for the ${joinList(sensors)}`);
   if (settings.length > 0) parts.push(`a switch for the ${joinList(settings)}`);
   if (features.battery !== undefined) parts.push('its battery');
-  const isSeveral = parts.length > 1 || outlets.length > 1;
+  const isSeveral = parts.length > 1 || lights.length > 1 || outlets.length > 1;
   return `${joinList(parts)}${isSeveral ? (device.isComposed ? ', all as one device' : ', each a device of its own') : ''}`;
 }
 

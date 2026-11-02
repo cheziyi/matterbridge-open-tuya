@@ -84,7 +84,7 @@ export function findGateway(device: TuyaCloudDevice, devices: readonly TuyaCloud
  *
  * Edge cases:
  *  - a gateway -> `gateway`: the devices behind it are listed on their own
- *  - a product the catalog lists, with no entry the plugin controls -> `otherKind`, such as a light
+ *  - a product the catalog lists, with no entry the plugin controls -> `otherKind`, such as a fan
  *  - a product the catalog does not list -> `unknownProduct`: the catalog may still match it by its data points
  *
  * @param {TuyaCloudDevice} device The device.
