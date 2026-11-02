@@ -172,6 +172,8 @@ describe('lights', () => {
         },
         light3: {
           on: { dataPoint: '1', kind: 'switch' },
+          brightness: { dataPoint: '2', kind: 'number', min: 0, max: 1000, targetRange: { min: 0, max: 10_000 }, scale: 100 },
+          colorTemperatureInK: { dataPoint: '3', kind: 'number', min: 0, max: 1000 },
           hue: { dataPoint: '4', kind: 'number', min: 0, max: 360 },
           saturation: { dataPoint: '4', kind: 'number', min: 0, max: 1000 },
           colorMode: { dataPoint: '5', kind: 'select', readOnly: true, values: [{ raw: 'colour', value: 'hs' }] },
@@ -198,6 +200,9 @@ describe('lights', () => {
     expect(first?.mode?.white).toBeUndefined();
     expect(first?.color?.brightness).toBeUndefined();
     expect(second).toEqual({ id: 'light2.on', component: 'light2', control: 'on', label: 'Light 2' });
+    // A target range is divided by the scale, as open-tuya reads it, and a colour temperature of a raw range is no colour temperature.
+    expect(third?.brightness).toEqual({ control: 'brightness', min: 0, max: 100 });
+    expect(third?.colorTemperature).toBeUndefined();
     expect(third?.color).toBeDefined();
     expect(third?.mode).toBeUndefined();
     // A mode with no colour value is no mode.

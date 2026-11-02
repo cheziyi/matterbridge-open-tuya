@@ -25,10 +25,10 @@ import type { MatterbridgeEndpoint } from 'matterbridge';
 import { ColorControl, OnOff } from 'matterbridge/matter/clusters';
 import type { ControlValue, ControlValues } from 'open-tuya';
 
-import type { LightFeature, RangedControl } from '../features.js';
+import type { LightFeature } from '../features.js';
+import { getBrightness, isShowingColor } from '../lightState.js';
 import { fromKelvin, fromMatterHueOrSaturation, fromMatterLevel, fromMatterMireds, fromMatterXy, type HueSaturation } from '../mapping.js';
 import { getLightKelvins } from './endpoints.js';
-import { isShowingColor } from './matterState.js';
 
 /** What a controller changed on a light: its on/off, its level, or its colour, which is also its colour temperature. */
 export type LightChange = 'onOff' | 'level' | 'color';
@@ -140,18 +140,6 @@ function setWhite(light: LightFeature, kelvin: number, level: number | null, con
   if (light.mode?.white !== undefined) controls[light.mode.control] = light.mode.white;
   if (light.colorTemperature !== undefined) controls[light.colorTemperature.control] = kelvin;
   return false;
-}
-
-/**
- * Get the brightness a level sets: that of the colour while the light shows its colour, else that of its white
- *
- * @param {LightFeature} light The light.
- * @param {boolean} isColor Whether the light shows its colour.
- * @returns {RangedControl | undefined} The brightness control, or undefined when the light has none.
- */
-function getBrightness(light: LightFeature, isColor: boolean): RangedControl | undefined {
-  if (isColor && light.color?.brightness !== undefined) return light.color.brightness;
-  return light.brightness ?? light.color?.brightness;
 }
 
 /**

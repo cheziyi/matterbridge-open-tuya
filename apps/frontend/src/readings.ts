@@ -21,6 +21,7 @@
  * limitations under the License.
  */
 
+import { getBrightness, isShowingColor } from '../../../src/lightState.js';
 import { getTemperatureUnit } from '../../../src/temperatureUnit.js';
 import type { ControlRef, DeviceFeatures, ProbeResult, SensorFeature } from './api.js';
 
@@ -58,11 +59,10 @@ export function describeReadings(features: DeviceFeatures | undefined, values: V
     const value = read(values, light);
     if (typeof value !== 'boolean') continue;
     const name = features.lights.length === 1 ? (value ? 'On' : 'Off') : `${light.label} ${value ? 'on' : 'off'}`;
-    const { brightness } = light;
+    // The brightness of the colour while the light shows its colour, else that of its white: the level Matter shows.
+    const brightness = getBrightness(light, isShowingColor(light, values));
     const level = brightness === undefined ? undefined : read(values, { component: light.component, control: brightness.control });
-    // The brightness of the white, which a light showing its colour does not use.
-    const isWhite = light.mode === undefined || read(values, { component: light.component, control: light.mode.control }) !== light.mode.color;
-    const percent = brightness !== undefined && typeof level === 'number' && isWhite ? Math.round(((level - brightness.min) / (brightness.max - brightness.min)) * 100) : undefined;
+    const percent = brightness !== undefined && typeof level === 'number' ? Math.round(((level - brightness.min) / (brightness.max - brightness.min)) * 100) : undefined;
     parts.push(percent === undefined || !value ? name : `${name} at ${Math.max(percent, 1)} %`);
   }
   const isSingleOutlet = features.outlets.length === 1;

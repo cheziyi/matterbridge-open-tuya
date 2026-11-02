@@ -25,7 +25,7 @@ import { goHome, saveDraft } from '../actions.js';
 import { type DeviceFeatures, type LanVersion, lanVersions, meterFeatureId } from '../api.js';
 import { button, notice, steps, unitHeader, unitStrip } from '../components.js';
 import { type Child, h } from '../dom.js';
-import { mainFeatureId } from '../drafts.js';
+import { hasMeter, mainFeatureId } from '../drafts.js';
 import { describeReadings } from '../readings.js';
 import { render } from '../render.js';
 import { currentDraft, deviceLabel, type Draft } from '../state.js';
@@ -106,10 +106,9 @@ function featureSection(draft: Draft, features: DeviceFeatures): HTMLElement {
       }),
     );
   }
-  if (features.meter !== undefined && features.lights.length === 0 && features.outlets.length > 0) {
-    const measures = [features.meter.power && 'power', features.meter.voltage && 'voltage', features.meter.current && 'current', features.meter.energy && 'energy used'].filter(
-      (name) => typeof name === 'string',
-    );
+  const { meter } = features;
+  if (meter !== undefined && hasMeter(features)) {
+    const measures = [meter.power && 'power', meter.voltage && 'voltage', meter.current && 'current', meter.energy && 'energy used'].filter((name) => typeof name === 'string');
     items.push(
       toggle(
         'feature-meter',

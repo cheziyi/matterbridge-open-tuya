@@ -25,7 +25,7 @@ import { loadState, openOptions, reconnectDevice, removeDevice, search, signOut,
 import { dataCenterNames, meterFeatureId, type StoredDevice } from '../api.js';
 import { button, notice } from '../components.js';
 import { type Child, h } from '../dom.js';
-import { draftFromStored, mainFeatureId } from '../drafts.js';
+import { draftFromStored, hasMeter, mainFeatureId } from '../drafts.js';
 import { describeReadings } from '../readings.js';
 import { render } from '../render.js';
 import { view } from '../state.js';
@@ -50,7 +50,7 @@ function describeExposure(device: StoredDevice): string {
   const parts = [first];
   if (lights.length > 0) parts.push(joinList(lights));
   if (outlets.length > 0) parts.push(joinList(outlets));
-  if (features.meter !== undefined && features.lights.length === 0 && features.outlets.length > 0 && !device.hiddenFeatures.includes(meterFeatureId)) parts.push('the meter');
+  if (hasMeter(features) && !device.hiddenFeatures.includes(meterFeatureId)) parts.push('the meter');
   if (sensors.length > 0) parts.push(`a sensor for the ${joinList(sensors)}`);
   if (settings.length > 0) parts.push(`a switch for the ${joinList(settings)}`);
   if (features.battery !== undefined) parts.push('its battery');

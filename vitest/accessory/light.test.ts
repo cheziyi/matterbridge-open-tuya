@@ -105,7 +105,9 @@ describe('lights', () => {
     test('should show the colour the device pushes, with the brightness of the colour as the level', async () => {
       client.push({ light: { colorMode: 'hs', colorBrightness: 0 } });
       const { endpoint } = accessory;
-      await vi.waitFor(() => expect(endpoint.getAttribute(ColorControl, 'colorMode')).toBe(ColorControl.ColorMode.CurrentHueAndCurrentSaturation));
+      // A read through the client runs after the push is written, and writes nothing.
+      await accessory.readDataPoints();
+      expect(endpoint.getAttribute(ColorControl, 'colorMode')).toBe(ColorControl.ColorMode.CurrentHueAndCurrentSaturation);
       expect(endpoint.getAttribute(ColorControl, 'enhancedColorMode')).toBe(ColorControl.EnhancedColorMode.CurrentHueAndCurrentSaturation);
       expect(endpoint.getAttribute(LevelControl, 'currentLevel')).toBe(1);
       expect(endpoint.getAttribute(ColorControl, 'currentSaturation')).toBe(254);
@@ -127,6 +129,17 @@ describe('lights', () => {
       // Matter shows the colour written once the write is done: a read through the client waits for it, and writes nothing.
       await accessory.readDataPoints();
       expect(accessory.endpoint.getAttribute(ColorControl, 'colorMode')).toBe(ColorControl.ColorMode.CurrentHueAndCurrentSaturation);
+    });
+
+    test('should turn the light to its white when a controller changes the colour mode alone', async () => {
+      // The colour temperature the endpoint holds is the white the device last reported: only the mode changes.
+      await writeAsController(accessory.endpoint, 'ColorControl', { colorMode: ColorControl.ColorMode.ColorTemperatureMireds });
+      await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledWith({ light: { colorMode: 'color_temp', colorTemperatureInK: 4000 } }));
+      expect(client.writeControls).toHaveBeenCalledTimes(1);
+      // A read through the client waits for the write to end, and writes nothing.
+      await accessory.readDataPoints();
+      expect(accessory.endpoint.getAttribute(ColorControl, 'colorMode')).toBe(ColorControl.ColorMode.ColorTemperatureMireds);
+      expect(accessory.endpoint.getAttribute(LevelControl, 'currentLevel')).toBe(128);
     });
 
     test('should turn the light to the white of a colour temperature a controller sets', async () => {
@@ -186,6 +199,12 @@ describe('lights', () => {
     expect(await accessory.start()).toBe(false);
     await writeAsController(accessory.endpoint, 'OnOff', { onOff: true });
     await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/^"Unrouted" did not take light on true: /)));
+    await vi.waitFor(() => expect(accessory.endpoint.getAttribute(OnOff, 'onOff')).toBe(false));
+    // What the level was before the request is not known: it stays as the controller asked.
+    await writeAsController(accessory.endpoint, 'LevelControl', { currentLevel: 200 });
+    await vi.waitFor(() => expect(log.error).toHaveBeenCalledWith(expect.stringMatching(/^"Unrouted" did not take light brightness \d+: /)));
+    await expect(accessory.readDataPoints()).rejects.toThrow();
+    expect(accessory.endpoint.getAttribute(LevelControl, 'currentLevel')).toBe(200);
     await accessory.dispose();
   });
 
@@ -204,10 +223,12 @@ describe('lights', () => {
   test('should turn path lights of no colour temperature to their white', async () => {
     const client = createFakeClient({ light: { on: true, colorMode: 'hs', brightness: 1000, hue: 0, saturation: 1000, colorBrightness: 1000 } });
     const accessory = await startLight(pathLightsFile, client, 'bf0000000000000013aa');
-    // A white of no colour temperature leaves the colour mode as it is.
-    client.push({ light: { colorMode: 'white' } });
-    await accessory.refresh();
     expect(accessory.endpoint.getAttribute(ColorControl, 'colorMode')).toBe(ColorControl.ColorMode.CurrentHueAndCurrentSaturation);
+    // A white of no colour temperature shows as a colour temperature, whatever the endpoint holds for it, not as the stale colour.
+    client.push({ light: { colorMode: 'white' } });
+    await accessory.readDataPoints();
+    expect(accessory.endpoint.getAttribute(ColorControl, 'colorMode')).toBe(ColorControl.ColorMode.ColorTemperatureMireds);
+    expect(accessory.endpoint.getAttribute(ColorControl, 'enhancedColorMode')).toBe(ColorControl.EnhancedColorMode.ColorTemperatureMireds);
     await writeAsController(accessory.endpoint, 'ColorControl', { colorMode: ColorControl.ColorMode.ColorTemperatureMireds, colorTemperatureMireds: 300 });
     await vi.waitFor(() => expect(client.writeControls).toHaveBeenCalledWith({ light: { colorMode: 'white' } }));
     await accessory.dispose();

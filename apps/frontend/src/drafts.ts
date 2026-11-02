@@ -73,6 +73,17 @@ export function mainFeatureId(features: DeviceFeatures): string | undefined {
 }
 
 /**
+ * Tell whether a device shows its meter: the plugin gives the meter to the main unit when it is an outlet
+ *
+ * @param {DeviceFeatures} features What the device can show.
+ * @returns {boolean} True when the device has a meter and its main unit is an outlet.
+ */
+export function hasMeter(features: DeviceFeatures): boolean {
+  const [outlet] = features.outlets;
+  return features.meter !== undefined && outlet !== undefined && mainFeatureId(features) === outlet.id;
+}
+
+/**
  * Drop the choices a device has no use for
  *
  * A feature the device does not have is neither left out nor added, so that the options stored are those of what it
@@ -85,7 +96,7 @@ export function mainFeatureId(features: DeviceFeatures): string | undefined {
 export function fitExposure(exposure: Exposure, features: DeviceFeatures): Exposure {
   const main = mainFeatureId(features);
   const shown = new Set([...features.lights, ...features.outlets, ...features.sensors].map((feature) => feature.id).filter((id) => id !== main));
-  if (features.meter !== undefined && features.lights.length === 0 && features.outlets.length > 0) shown.add('meter');
+  if (hasMeter(features)) shown.add('meter');
   const added = new Set(features.settingSwitches.map((feature) => feature.id));
   return {
     hiddenFeatures: exposure.hiddenFeatures.filter((id) => shown.has(id)),
