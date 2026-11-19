@@ -21,8 +21,8 @@
  * limitations under the License.
  */
 
+import type { NodeStorage } from 'matterbridge/storage';
 import { isValidInteger, isValidObject } from 'matterbridge/utils';
-import type { NodeStorage } from 'node-persist-manager';
 
 import type { TuyaDeviceConfig } from '../config.js';
 
