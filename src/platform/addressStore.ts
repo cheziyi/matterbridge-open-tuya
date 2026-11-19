@@ -21,8 +21,8 @@
  * limitations under the License.
  */
 
+import type { NodeStorage } from 'matterbridge/storage';
 import { isValidObject } from 'matterbridge/utils';
-import type { NodeStorage } from 'node-persist-manager';
 import type { ProtocolVersion } from 'open-tuya';
 
 import { isMember, LAN_VERSIONS, normalizeHost } from '../config.js';
