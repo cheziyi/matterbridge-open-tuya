@@ -18,7 +18,7 @@ import {
   pickSupportedEntry,
   readValue,
 } from '../src/features.js';
-import { entryOf, leakFile, lightFile, motionModel, multiSensorFile, plugFile, stripFile } from './fakeTuya.js';
+import { colorBulbFile, dualDimmerFile, entryOf, fanFile, leakFile, motionModel, multiSensorFile, pathLightsFile, plugFile, stripFile, whiteBulbFile } from './fakeTuya.js';
 
 describe('labelControl', () => {
   test('should name the power of a device Power', () => {
@@ -90,8 +90,8 @@ describe('getDeviceFeatures', () => {
       },
       source: { file: 'test.yaml', commit: '0' },
     };
-    expect(getDeviceFeatures(entry)).toEqual({ outlets: [], settingSwitches: [], sensors: [] });
-    expect(getDeviceFeatures({ ...entry, components: {} })).toEqual({ outlets: [], settingSwitches: [], sensors: [] });
+    expect(getDeviceFeatures(entry)).toEqual({ lights: [], outlets: [], settingSwitches: [], sensors: [] });
+    expect(getDeviceFeatures({ ...entry, components: {} })).toEqual({ lights: [], outlets: [], settingSwitches: [], sensors: [] });
   });
 
   test('should take the open door of a binary sensor as a contact, read from the catalog or from its type', () => {
@@ -112,19 +112,122 @@ describe('getDeviceFeatures', () => {
   });
 });
 
-describe('getEntrySupport', () => {
-  test('should support a plug, a strip and a sensor', () => {
-    for (const file of [plugFile, stripFile, multiSensorFile, leakFile]) expect(getEntrySupport(entryOf(file))).toBe('supported');
+describe('lights', () => {
+  test('should give a bulb of a colour and a white its brightness, its colour temperature, its colour and its mode', () => {
+    expect(getDeviceFeatures(entryOf(colorBulbFile)).lights).toEqual([
+      {
+        id: 'light.on',
+        component: 'light',
+        control: 'on',
+        label: 'Light',
+        brightness: { control: 'brightness', min: 10, max: 1000 },
+        colorTemperature: { control: 'colorTemperatureInK', min: 2700, max: 6500 },
+        color: {
+          hue: { control: 'hue', min: 0, max: 360 },
+          saturation: { control: 'saturation', min: 0, max: 1000 },
+          brightness: { control: 'colorBrightness', min: 0, max: 1000 },
+        },
+        mode: { control: 'colorMode', color: 'hs', white: 'color_temp' },
+      },
+    ]);
   });
 
-  test('should not support a light, nor a device with nothing to show', () => {
-    expect(getEntrySupport(entryOf(lightFile))).toBe('otherKind');
+  test('should give a white bulb no colour, and path lights a white with no colour temperature', () => {
+    const [white] = getDeviceFeatures(entryOf(whiteBulbFile)).lights;
+    expect(white?.colorTemperature).toEqual({ control: 'colorTemperatureInK', min: 2700, max: 6500 });
+    expect(white?.color).toBeUndefined();
+    expect(white?.mode).toBeUndefined();
+    const [path] = getDeviceFeatures(entryOf(pathLightsFile)).lights;
+    expect(path?.colorTemperature).toBeUndefined();
+    expect(path?.mode).toEqual({ control: 'colorMode', color: 'hs', white: 'white' });
+  });
+
+  test('should give a dual dimmer a light for each channel', () => {
+    expect(getDeviceFeatures(entryOf(dualDimmerFile)).lights.map((light) => [light.id, light.label, light.brightness?.max])).toEqual([
+      ['light1.on', 'Light 1', 255],
+      ['light2.on', 'Light 2', 255],
+    ]);
+  });
+
+  test('should read the ranges of a light as the catalog gives them, and leave out what cannot be set', () => {
+    const entry: TuyaDeviceEntry = {
+      name: 'Test',
+      products: [],
+      dataPoints: { '1': { type: 'boolean' }, '2': { type: 'integer' }, '3': { type: 'integer' }, '4': { type: 'hex' }, '5': { type: 'string' } },
+      components: {
+        light: {
+          on: { dataPoint: '1', kind: 'switch' },
+          brightness: { dataPoint: '2', kind: 'number', min: 10, max: 1000, scale: 10 },
+          colorTemperatureInK: { dataPoint: '3', kind: 'number', unit: 'K', min: 0, max: 255, targetRange: { min: 6000, max: 3000 } },
+          hue: { dataPoint: '4', mask: 'FFFF0000', kind: 'number', min: 0, max: 360 },
+          saturation: { dataPoint: '4', mask: '0000FFFF', kind: 'number', min: 0, max: 1000 },
+          colorMode: { dataPoint: '5', kind: 'select', values: [{ raw: 'colour', value: 'hs' }] },
+        },
+        light2: {
+          on: { dataPoint: '1', kind: 'switch' },
+          brightness: { dataPoint: '2', kind: 'number', values: [{ raw: 1, value: 'low' }] },
+          colorTemperatureInK: { dataPoint: '3', kind: 'number', min: 0, max: 0 },
+          hue: { dataPoint: '4', kind: 'number', min: 0, max: 360 },
+          saturation: { dataPoint: '4', kind: 'number', min: 0, max: 1000, readOnly: true },
+        },
+        light3: {
+          on: { dataPoint: '1', kind: 'switch' },
+          brightness: { dataPoint: '2', kind: 'number', min: 0, max: 1000, targetRange: { min: 0, max: 10_000 }, scale: 100 },
+          colorTemperatureInK: { dataPoint: '3', kind: 'number', min: 0, max: 1000 },
+          hue: { dataPoint: '4', kind: 'number', min: 0, max: 360 },
+          saturation: { dataPoint: '4', kind: 'number', min: 0, max: 1000 },
+          colorMode: { dataPoint: '5', kind: 'select', readOnly: true, values: [{ raw: 'colour', value: 'hs' }] },
+        },
+        light4: { on: { dataPoint: '1', kind: 'switch', readOnly: true } },
+        light5: { colorMode: { dataPoint: '5', kind: 'select', values: [{ raw: 'scene', value: 'Scene' }] } },
+        light6: {
+          on: { dataPoint: '1', kind: 'switch' },
+          hue: { dataPoint: '4', kind: 'number', min: 0, max: 360 },
+          saturation: { dataPoint: '4', kind: 'number', min: 0, max: 1000 },
+          colorMode: { dataPoint: '5', kind: 'select', values: [{ raw: 'scene', value: 'Scene' }] },
+        },
+        light7: {
+          on: { dataPoint: '1', kind: 'switch' },
+          hue: { dataPoint: '4', kind: 'number', min: 0, max: 360 },
+          saturation: { dataPoint: '4', kind: 'number', min: 0, max: 1000 },
+          colorMode: { dataPoint: '5', kind: 'select' },
+        },
+      },
+      source: { file: 'test.yaml', commit: '0' },
+    };
+    const [first, second, third, ...others] = getDeviceFeatures(entry).lights;
+    expect(first).toMatchObject({ brightness: { min: 1, max: 100 }, colorTemperature: { min: 3000, max: 6000 }, mode: { control: 'colorMode', color: 'hs' } });
+    expect(first?.mode?.white).toBeUndefined();
+    expect(first?.color?.brightness).toBeUndefined();
+    expect(second).toEqual({ id: 'light2.on', component: 'light2', control: 'on', label: 'Light 2' });
+    // A target range is divided by the scale, as open-tuya reads it, and a colour temperature of a raw range is no colour temperature.
+    expect(third?.brightness).toEqual({ control: 'brightness', min: 0, max: 100 });
+    expect(third?.colorTemperature).toBeUndefined();
+    expect(third?.color).toBeDefined();
+    expect(third?.mode).toBeUndefined();
+    // A mode with no colour value is no mode.
+    expect(others.map((light) => [light.id, light.mode])).toEqual([
+      ['light6.on', undefined],
+      ['light7.on', undefined],
+    ]);
+    const lightless = { ...entry, components: { light: entry.components.light4 ?? {} } };
+    expect(getEntrySupport(lightless)).toBe('noControls');
+  });
+});
+
+describe('getEntrySupport', () => {
+  test('should support a light, a plug, a strip and a sensor', () => {
+    for (const file of [colorBulbFile, dualDimmerFile, plugFile, stripFile, multiSensorFile, leakFile]) expect(getEntrySupport(entryOf(file))).toBe('supported');
+  });
+
+  test('should not support a fan, nor a device with nothing to show', () => {
+    expect(getEntrySupport(entryOf(fanFile))).toBe('otherKind');
     expect(getEntrySupport(entryOf('advwin_6l_petfeeder.yaml'))).toBe('noControls');
   });
 
   test('should pick the first entry the plugin supports', () => {
-    expect(pickSupportedEntry([entryOf(lightFile), entryOf(plugFile)])?.source?.file).toBe(plugFile);
-    expect(pickSupportedEntry([entryOf(lightFile)])).toBeUndefined();
+    expect(pickSupportedEntry([entryOf(fanFile), entryOf(plugFile)])?.source?.file).toBe(plugFile);
+    expect(pickSupportedEntry([entryOf(fanFile)])).toBeUndefined();
   });
 });
 

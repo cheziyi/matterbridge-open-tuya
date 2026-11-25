@@ -24,9 +24,11 @@
 import type { MatterbridgeEndpoint } from 'matterbridge';
 import {
   BooleanState,
+  ColorControl,
   ElectricalEnergyMeasurement,
   ElectricalPowerMeasurement,
   IlluminanceMeasurement,
+  LevelControl,
   OccupancySensing,
   OnOff,
   PowerSource,
@@ -35,18 +37,24 @@ import {
 } from 'matterbridge/matter/clusters';
 import type { ControlValues } from 'open-tuya';
 
-import { readValue } from '../features.js';
+import { type LightFeature, readValue } from '../features.js';
+import { getBrightness, isShowingColor } from '../lightState.js';
 import {
   criticalBatteryInPercent,
   lowBatteryInPercent,
   toBoolean,
   toMatterBatteryPercent,
+  toMatterHueOrSaturation,
   toMatterHumidity,
   toMatterIlluminance,
+  toMatterLevel,
   toMatterMeterReading,
+  toMatterMireds,
   toMatterTemperature,
+  toMatterXy,
 } from '../mapping.js';
 import { getTemperatureUnit } from '../temperatureUnit.js';
+import { getLightKelvins } from './endpoints.js';
 import type { AccessoryLayout, LayoutUnit } from './layout.js';
 
 /** The endpoint of each unit of a device, as the accessory built them. */
@@ -55,6 +63,67 @@ export interface AccessoryEndpoints {
   readonly endpoint: MatterbridgeEndpoint;
   /** The endpoint of each side unit, by the id of its feature. */
   readonly sideEndpoints: ReadonlyMap<string, MatterbridgeEndpoint>;
+}
+
+/**
+ * Write what a light reports to its endpoint
+ *
+ * The level is the brightness of its colour while it shows its colour, and the brightness of its white otherwise.
+ *
+ * Edge cases:
+ *  - written only when the changed values carry a control of the light: then every attribute is written from every control last known, since a change of its mode changes what its level is
+ *  - a value that is not a number keeps what the endpoint shows
+ *  - the colour mode follows the mode of the light: its colour, or the colour temperature of its white, which a white of no colour temperature shows as well, so that the stale colour is not shown
+ *
+ * @param {MatterbridgeEndpoint} endpoint The endpoint of the light.
+ * @param {LightFeature} light The light.
+ * @param {ControlValues} values Every control the device reports, as last known.
+ * @param {ControlValues} changed The controls that changed, among them.
+ * @returns {Promise<void>} Resolves when the attributes are written.
+ */
+async function applyLight(endpoint: MatterbridgeEndpoint, light: LightFeature, values: ControlValues, changed: ControlValues): Promise<void> {
+  if (changed[light.component] === undefined) return;
+  const read = (control: string): ControlValues[string][string] | undefined => readValue(values, { component: light.component, control });
+  const isOn = read(light.control);
+  if (isOn !== undefined) await endpoint.updateAttribute(OnOff, 'onOff', toBoolean(isOn));
+  const isColor = isShowingColor(light, values);
+  const brightness = getBrightness(light, isColor);
+  const level = brightness === undefined ? null : toMatterLevel(read(brightness.control), brightness);
+  if (level !== null) await endpoint.updateAttribute(LevelControl, 'currentLevel', level);
+  if (light.colorTemperature !== undefined) {
+    const mireds = toMatterMireds(read(light.colorTemperature.control), getLightKelvins(light));
+    if (mireds !== null) await endpoint.updateAttribute(ColorControl, 'colorTemperatureMireds', mireds);
+  }
+  if (light.color !== undefined) {
+    const hueValue = read(light.color.hue.control);
+    const saturationValue = read(light.color.saturation.control);
+    const hue = toMatterHueOrSaturation(hueValue, light.color.hue);
+    const saturation = toMatterHueOrSaturation(saturationValue, light.color.saturation);
+    if (hue !== null && saturation !== null) {
+      await endpoint.updateAttribute(ColorControl, 'currentHue', hue);
+      await endpoint.updateAttribute(ColorControl, 'currentSaturation', saturation);
+      const { currentX, currentY } = toMatterXy({ hue: (hue / 254) * 360, saturation: saturation / 254 });
+      await endpoint.updateAttribute(ColorControl, 'currentX', currentX);
+      await endpoint.updateAttribute(ColorControl, 'currentY', currentY);
+    }
+  }
+  if (isColor) await setColorMode(endpoint, ColorControl.ColorMode.CurrentHueAndCurrentSaturation, ColorControl.EnhancedColorMode.CurrentHueAndCurrentSaturation);
+  else if (light.colorTemperature !== undefined || light.mode?.white !== undefined) {
+    await setColorMode(endpoint, ColorControl.ColorMode.ColorTemperatureMireds, ColorControl.EnhancedColorMode.ColorTemperatureMireds);
+  }
+}
+
+/**
+ * Write the colour mode of a light, which says whether its colour is its hue and saturation or its colour temperature
+ *
+ * @param {MatterbridgeEndpoint} endpoint The endpoint of the light.
+ * @param {ColorControl.ColorMode} mode The mode.
+ * @param {ColorControl.EnhancedColorMode} enhancedMode The same mode, as the enhanced mode names it.
+ * @returns {Promise<void>} Resolves when the mode and the enhanced mode are written.
+ */
+async function setColorMode(endpoint: MatterbridgeEndpoint, mode: ColorControl.ColorMode, enhancedMode: ColorControl.EnhancedColorMode): Promise<void> {
+  await endpoint.updateAttribute(ColorControl, 'colorMode', mode);
+  await endpoint.updateAttribute(ColorControl, 'enhancedColorMode', enhancedMode);
 }
 
 /**
@@ -73,6 +142,10 @@ export interface AccessoryEndpoints {
  * @returns {Promise<void>} Resolves when the attribute is written.
  */
 async function applyUnit(endpoint: MatterbridgeEndpoint, unit: LayoutUnit, values: ControlValues, changed: ControlValues): Promise<void> {
+  if (unit.type === 'light') {
+    await applyLight(endpoint, unit.feature, values, changed);
+    return;
+  }
   const value = readValue(changed, unit.feature);
   if (value === undefined) return;
   if (unit.type !== 'sensor') {

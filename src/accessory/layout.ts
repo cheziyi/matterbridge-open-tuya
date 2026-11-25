@@ -22,16 +22,20 @@
  */
 
 import { meterFeatureId, type TuyaDeviceExposure } from '../config.js';
-import type { ControlRef, DeviceFeatures, MeterFeature, SensorFeature, SwitchFeature } from '../features.js';
+import type { ControlRef, DeviceFeatures, LightFeature, MeterFeature, SensorFeature, SwitchFeature } from '../features.js';
 
-/** One endpoint of a device: an outlet, a sensor, or a setting switch. */
-export type LayoutUnit = { type: 'outlet'; feature: SwitchFeature } | { type: 'setting'; feature: SwitchFeature } | { type: 'sensor'; feature: SensorFeature };
+/** One endpoint of a device: a light, an outlet, a sensor, or a setting switch. */
+export type LayoutUnit =
+  | { type: 'light'; feature: LightFeature }
+  | { type: 'outlet'; feature: SwitchFeature }
+  | { type: 'setting'; feature: SwitchFeature }
+  | { type: 'sensor'; feature: SensorFeature };
 
 /** How the features of a device are laid out on its Matter endpoints. */
 export interface AccessoryLayout {
-  /** The device itself: its first outlet, or its first sensor when it has no outlet. */
+  /** The device itself: its first light, else its first outlet, else its first sensor. */
   main: LayoutUnit;
-  /** The other outlets, the other sensors and the setting switches shown, in that order. */
+  /** The other lights, the other outlets, the other sensors and the setting switches shown, in that order. */
   sides: LayoutUnit[];
   /** The meter of the main outlet, when it is shown. */
   meter?: MeterFeature;
@@ -45,7 +49,7 @@ export interface AccessoryLayout {
  * Lay out the features of a device on its Matter endpoints
  *
  * Edge cases:
- *  - a device with neither an outlet nor a sensor -> undefined: it has nothing to show
+ *  - a device with no light, no outlet and no sensor -> undefined: it has nothing to show
  *  - the main unit is shown whatever `hiddenFeatures` says
  *  - an id in `hiddenFeatures` or `addedFeatures` the features do not have is ignored
  *  - the meter needs an outlet to measure: a device without one shows none
@@ -56,6 +60,7 @@ export interface AccessoryLayout {
  */
 export function getAccessoryLayout(exposure: TuyaDeviceExposure, features: DeviceFeatures): AccessoryLayout | undefined {
   const units: LayoutUnit[] = [
+    ...features.lights.map((feature): LayoutUnit => ({ type: 'light', feature })),
     ...features.outlets.map((feature): LayoutUnit => ({ type: 'outlet', feature })),
     ...features.sensors.map((feature): LayoutUnit => ({ type: 'sensor', feature })),
     ...features.settingSwitches.map((feature): LayoutUnit => ({ type: 'setting', feature })),

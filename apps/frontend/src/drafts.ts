@@ -63,13 +63,24 @@ export function pickExposure(source: Exposure): Exposure {
 }
 
 /**
- * Get the feature that is the device itself, and always shown: its first outlet, or its first sensor when it has no outlet
+ * Get the feature that is the device itself, and always shown: its first light, else its first outlet, else its first sensor
  *
  * @param {DeviceFeatures} features What the device can show.
- * @returns {string | undefined} The id of the feature, or undefined for a device with neither.
+ * @returns {string | undefined} The id of the feature, or undefined for a device with none.
  */
 export function mainFeatureId(features: DeviceFeatures): string | undefined {
-  return (features.outlets[0] ?? features.sensors[0])?.id;
+  return (features.lights[0] ?? features.outlets[0] ?? features.sensors[0])?.id;
+}
+
+/**
+ * Tell whether a device shows its meter: the plugin gives the meter to the main unit when it is an outlet
+ *
+ * @param {DeviceFeatures} features What the device can show.
+ * @returns {boolean} True when the device has a meter and its main unit is an outlet.
+ */
+export function hasMeter(features: DeviceFeatures): boolean {
+  const [outlet] = features.outlets;
+  return features.meter !== undefined && outlet !== undefined && mainFeatureId(features) === outlet.id;
 }
 
 /**
@@ -84,8 +95,8 @@ export function mainFeatureId(features: DeviceFeatures): string | undefined {
  */
 export function fitExposure(exposure: Exposure, features: DeviceFeatures): Exposure {
   const main = mainFeatureId(features);
-  const shown = new Set([...features.outlets, ...features.sensors].map((feature) => feature.id).filter((id) => id !== main));
-  if (features.meter !== undefined && features.outlets.length > 0) shown.add('meter');
+  const shown = new Set([...features.lights, ...features.outlets, ...features.sensors].map((feature) => feature.id).filter((id) => id !== main));
+  if (hasMeter(features)) shown.add('meter');
   const added = new Set(features.settingSwitches.map((feature) => feature.id));
   return {
     hiddenFeatures: exposure.hiddenFeatures.filter((id) => shown.has(id)),

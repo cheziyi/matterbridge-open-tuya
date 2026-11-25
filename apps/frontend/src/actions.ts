@@ -448,7 +448,7 @@ export async function saveDraft(draft: Draft): Promise<void> {
     // A model names the controls by their codes in the device's category, which the plugin checks against the device list.
     model: draft.model,
     category: device.category,
-    ...fitExposure(pickExposure(draft), draft.features ?? { outlets: [], settingSwitches: [], sensors: [] }),
+    ...fitExposure(pickExposure(draft), draft.features ?? { lights: [], outlets: [], settingSwitches: [], sensors: [] }),
     host: hasHost ? draft.host : undefined,
     version: hasHost ? draft.version : undefined,
     isCloudOnly: draft.isCloudOnly || undefined,
